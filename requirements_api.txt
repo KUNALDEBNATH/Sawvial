@@ -1,0 +1,5 @@
+numpy<2
+fastapi>=0.110
+uvicorn>=0.29
+sentencepiece
+protobuf

@@ -1,0 +1,17 @@
+{
+  "build_timestamp": "2026-10-05T09:04:02.572507+00:00",
+  "software_version": "2.0.0",
+  "taxonomy_version": "1.0.0",
+  "python_version": "3.10.10",
+  "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+  "embedding_offline_mode": true,
+  "chunking_config": {
+    "min_chunk_chars": 80,
+    "max_chunk_chars": 1600,
+    "target_chunk_chars": 700
+  },
+  "extraction_config": {
+    "min_importance_score": 0.28,
+    "review_importance_score": 0.4
+  }
+}

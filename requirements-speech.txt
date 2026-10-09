@@ -1,0 +1,2 @@
+# Speech synthesis uses the existing PyTorch and Transformers API environment.
+# The small per-language MMS-VITS weights are downloaded on first use.

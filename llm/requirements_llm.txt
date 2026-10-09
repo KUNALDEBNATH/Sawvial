@@ -1,0 +1,7 @@
+# Keep numpy<2 - faiss-cpu in this project breaks on NumPy 2.x
+numpy<2
+transformers>=4.44,<5
+peft>=0.12
+accelerate>=0.33
+# only needed for --4bit (QLoRA). Supported on Windows from 0.43.
+bitsandbytes>=0.43

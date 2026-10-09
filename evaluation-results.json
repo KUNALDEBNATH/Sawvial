@@ -1,0 +1,166 @@
+{
+  "api_url": "http://localhost:8000",
+  "top_k": 5,
+  "seed": 42,
+  "summary": {
+    "cases": 7,
+    "precision@5": 0.3143,
+    "recall@5": 1.0,
+    "mrr": 1.0,
+    "ndcg@5": 1.0,
+    "grounded_rate": 1.0,
+    "cited_source_ratio": 0.3143,
+    "token_f1": null,
+    "rouge_l_f1": null,
+    "one_line_compliance": 1.0,
+    "mean_latency_ms": 26730.8
+  },
+  "results": [
+    {
+      "case_id": "farm-water-conservation",
+      "question": "Tell me how to conserve water in farming.",
+      "answer": "To conserve water in farming according to the available study records:\n\n1. **Deficit Irrigation**: Implement deficit irrigation methods where possible to minimize water usage without compromising crop growth. This involves adjusting watering schedules based on actual crop needs rather than fixed amounts.\n\n2. **Soil Moisture Monitoring**: Utilize digital technologies like UAV-based soil moisture monitoring to precisely measure soil moisture levels. This helps in optimizing irrigation schedules and ensuring efficient water use.\n\n3. **Precision Agriculture**: Employ advanced sensors and IoT devices to monitor soil moisture, nutrient levels, and weather conditions in real time. This allows for more targeted and precise application of inputs, thereby conserving water.\n\n4. **Water-Saving Irrigation Techniques**: Promote the adoption of modern irrigation techniques such as micro-irrigation and furrow irrigation. These methods can significantly reduce water loss due to evaporation and runoff.\n\n5. **Mulching and Organic Fertilization**: Apply mulches around plants to retain soil moisture and improve overall soil health. Additionally, consider organic fertilizers instead of synthetic ones, which require less water during decomposition.\n\n6. **Crop Rotation and Integrated Farming Practices**: Rotate crops to break pest cycles and enhance soil fertility naturally. This approach minimizes the need for frequent chemical inputs, reducing water usage associated with them.\n\n7. **Integrated Water-Fertilizer Management**: Optimize both water and fertilizer use together. For example, apply fertilizers at times when they will be most effective, taking advantage of rainfall events or",
+      "grounded": true,
+      "latency_ms": 74592.3,
+      "retrieved_ids": [
+        "SWM_012405",
+        "SWM_012799",
+        "SWM_012408",
+        "SWM_012802",
+        "SWM_015183"
+      ],
+      "metrics": {
+        "precision@5": 0.2,
+        "recall@5": 1.0,
+        "reciprocal_rank": 1.0,
+        "ndcg@5": 1.0,
+        "cited_source_ratio": 0.0
+      }
+    },
+    {
+      "case_id": "contextual-water-benefit",
+      "question": "How to use water so that can benefit?",
+      "answer": "To conserve water in farming, you can implement deficit irrigation methods, monitor soil moisture levels, and optimize irrigation scheduling based on real-time data. These strategies help reduce water waste and improve overall crop yields. For example, studies have shown that using UAV-based soil moisture monitoring can support precise irrigation and maintain maximum crop yield while minimizing water usage. Additionally, integrating digital technologies like open-source platforms for agricultural water management can provide alerts about critical soil moisture thresholds or pest risks, aiding in efficient water use.",
+      "grounded": true,
+      "latency_ms": 26389.5,
+      "retrieved_ids": [
+        "SWM_012405",
+        "SWM_012408",
+        "SWM_012799",
+        "SWM_012440",
+        "SWM_012802"
+      ],
+      "metrics": {
+        "precision@5": 0.2,
+        "recall@5": 1.0,
+        "reciprocal_rank": 1.0,
+        "ndcg@5": 1.0,
+        "cited_source_ratio": 0.0
+      }
+    },
+    {
+      "case_id": "water-one-line-after-followups",
+      "question": "Write it in one line.",
+      "answer": "Use irrigation scheduling and soil moisture monitoring to conserve water.",
+      "grounded": true,
+      "latency_ms": 7818.1,
+      "retrieved_ids": [
+        "SWM_012405",
+        "SWM_012799",
+        "SWM_012408",
+        "SWM_012802",
+        "SWM_015183"
+      ],
+      "metrics": {
+        "precision@5": 0.2,
+        "recall@5": 1.0,
+        "reciprocal_rank": 1.0,
+        "ndcg@5": 1.0,
+        "cited_source_ratio": 0.2,
+        "one_line_compliance": 1.0
+      }
+    },
+    {
+      "case_id": "potato-irrigation",
+      "question": "How do I grow potatoes using water properly?",
+      "answer": "The dataset records 3 irrigations for potato; it does not specify the timing or water amount. [SWM_000671]",
+      "grounded": true,
+      "latency_ms": 2117.5,
+      "retrieved_ids": [
+        "SWM_000671"
+      ],
+      "metrics": {
+        "precision@5": 0.2,
+        "recall@5": 1.0,
+        "reciprocal_rank": 1.0,
+        "ndcg@5": 1.0,
+        "cited_source_ratio": 1.0
+      }
+    },
+    {
+      "case_id": "potato-one-line-followup",
+      "question": "Write that in one line.",
+      "answer": "The dataset records 3 irrigations for potato; it does not specify the timing or water amount. [SWM_000671]",
+      "grounded": true,
+      "latency_ms": 2117.6,
+      "retrieved_ids": [
+        "SWM_000671"
+      ],
+      "metrics": {
+        "precision@5": 0.2,
+        "recall@5": 1.0,
+        "reciprocal_rank": 1.0,
+        "ndcg@5": 1.0,
+        "cited_source_ratio": 1.0,
+        "one_line_compliance": 1.0
+      }
+    },
+    {
+      "case_id": "soil-fertility",
+      "question": "I want to make my soil more fertile. How?",
+      "answer": "Based on the retrieved study records, making your soil more fertile involves several key strategies:\n\n1. **Composting**: Composting can significantly enhance soil fertility by adding organic matter and nutrients. This process breaks down waste materials, enriching the soil with essential minerals and humus.\n\n2. **Organic Amendments**: Incorporating compost, farmyard manure, and other organic substances can improve soil structure, increase water-holding capacity, and boost nutrient levels.\n\n3. **Soil pH Adjustment**: Adjusting soil pH using lime can help neutralize alkaline conditions, which often inhibit nutrient absorption by plants. This is particularly important in areas where soil tends to be too alkaline.\n\n4. **Crop Rotation**: Rotating crops can introduce different types of organisms and nutrients to the soil, promoting overall soil health and fertility.\n\n5. **Mineral Management**: Addressing issues related to heavy metals like nickel, which can harm soil fertility, by using methods such as adjusting soil pH with lime and incorporating organic amendments to reduce their presence.\n\nThese approaches align well with the principles discussed in various records regarding soil health and fertility improvements.",
+      "grounded": true,
+      "latency_ms": 42897.9,
+      "retrieved_ids": [
+        "SWM_003637",
+        "SWM_002322",
+        "SWM_002555",
+        "SWM_008381",
+        "SWM_003938"
+      ],
+      "metrics": {
+        "precision@5": 0.6,
+        "recall@5": 1.0,
+        "reciprocal_rank": 1.0,
+        "ndcg@5": 1.0,
+        "cited_source_ratio": 0.0
+      }
+    },
+    {
+      "case_id": "irrigation-efficiency",
+      "question": "How can I improve irrigation efficiency?",
+      "answer": "To improve irrigation efficiency, consider implementing drip irrigation, as it offers precision in delivering water directly to the plant roots without causing yield penalties. Additionally, enhancing irrigation efficiency involves designing appropriate irrigation systems, such as those featuring advanced components like drippers, sprinklers, micro-sprinklers, pipe layouts, filtration systems, and pressure regulators. Furthermore, utilizing smart control systems can help achieve more uniform watering and reduce water loss. Improving irrigation efficiency also requires measuring field irrigation efficiency accurately, either through traditional methods like infiltrating models based on basic field data or newer deterministic and stochastic models that analyze irrigation water delivery costs. Lastly, adopting new technologies like micro-irrigation can significantly enhance efficiency, as evidenced by studies showing that these systems outperform conventional methods in terms of water use efficiency.",
+      "grounded": true,
+      "latency_ms": 31182.5,
+      "retrieved_ids": [
+        "SWM_012781",
+        "SWM_014375",
+        "SWM_012778",
+        "SWM_014227",
+        "SWM_012277"
+      ],
+      "metrics": {
+        "precision@5": 0.6,
+        "recall@5": 1.0,
+        "reciprocal_rank": 1.0,
+        "ndcg@5": 1.0,
+        "cited_source_ratio": 0.0
+      }
+    }
+  ],
+  "metric_notes": {
+    "retrieval": "Gold knowledge-unit IDs are used for precision/recall, MRR, and nDCG.",
+    "answer_similarity": "Token F1 and ROUGE-L compare wording to references; valid paraphrases may score low.",
+    "faithfulness": "Not automatically judged: use human review or a calibrated LLM judge for factual faithfulness. Grounded rate and cited-source ratio are not faithfulness scores."
+  }
+}

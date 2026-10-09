@@ -1,0 +1,9 @@
+pymupdf>=1.24.0
+faiss-cpu>=1.7.4
+numpy>=1.24.0
+tqdm>=4.66.0
+scikit-learn>=1.3.0
+
+# Optional (recommended for production-quality semantic embeddings).
+# Not required in --offline mode, which uses the built-in TF-IDF embedder.
+sentence-transformers>=2.6.0

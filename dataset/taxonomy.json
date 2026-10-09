@@ -1,0 +1,187 @@
+{
+  "taxonomy_version": "1.0.0",
+  "allowed_domains": [
+    "soil_management",
+    "water_management",
+    "soil_water_conservation_management"
+  ],
+  "domains": {
+    "soil_management": {
+      "label": "Soil Management",
+      "subdomains": {
+        "soil_properties": {
+          "topics": ["physical_properties", "chemical_properties", "biological_properties",
+                     "soil_texture", "soil_structure", "bulk_density", "porosity",
+                     "aggregate_stability", "infiltration", "hydraulic_properties"]
+        },
+        "soil_chemistry": {
+          "topics": ["ph", "electrical_conductivity", "organic_carbon", "organic_matter",
+                     "cec", "salinity", "sodicity", "acidity"]
+        },
+        "soil_fertility": {
+          "topics": ["nitrogen", "phosphorus", "potassium", "micronutrients",
+                     "nutrient_availability", "soil_fertility_assessment"]
+        },
+        "soil_nutrient_management": {
+          "topics": ["fertilizer_management", "nutrient_application",
+                     "integrated_nutrient_management", "nutrient_deficiency", "soil_testing"]
+        },
+        "soil_health": {
+          "topics": ["soil_quality", "soil_organic_matter", "soil_organic_carbon",
+                     "biological_activity", "soil_health_indicators"]
+        },
+        "soil_amendments": {
+          "topics": ["compost", "manure", "biochar", "lime", "gypsum", "organic_amendments"]
+        },
+        "soil_degradation": {
+          "topics": ["soil_compaction", "soil_salinization", "soil_sodification",
+                     "soil_acidification", "land_degradation"]
+        },
+        "soil_moisture_properties": {
+          "topics": ["soil_moisture", "field_capacity", "wilting_point",
+                     "available_water", "soil_water_retention"]
+        }
+      }
+    },
+    "water_management": {
+      "label": "Water Management",
+      "subdomains": {
+        "irrigation_management": {
+          "topics": ["drip_irrigation", "sprinkler_irrigation", "surface_irrigation",
+                     "furrow_irrigation", "flood_irrigation", "micro_irrigation",
+                     "subsurface_irrigation"]
+        },
+        "irrigation_scheduling": {
+          "topics": ["irrigation_timing", "irrigation_frequency", "irrigation_depth",
+                     "deficit_irrigation", "scheduling_methods"]
+        },
+        "crop_water_requirement": {
+          "topics": ["evapotranspiration", "reference_et", "crop_et",
+                     "crop_coefficient", "water_requirement_estimation"]
+        },
+        "water_use_efficiency": {
+          "topics": ["irrigation_water_use_efficiency", "water_productivity",
+                     "crop_water_productivity"]
+        },
+        "water_availability": {
+          "topics": ["groundwater", "surface_water", "rainfall", "water_storage", "water_scarcity"]
+        },
+        "water_quality": {
+          "topics": ["irrigation_water_quality", "salinity", "sodicity",
+                     "electrical_conductivity", "contaminants"]
+        },
+        "drainage_management": {
+          "topics": ["agricultural_drainage", "waterlogging", "drainage_design",
+                     "drainage_management"]
+        },
+        "watershed_water_management": {
+          "topics": ["watershed_planning", "runoff_management", "water_storage",
+                     "catchment_management"]
+        },
+        "water_stress_management": {
+          "topics": ["crop_water_stress", "drought_water_management",
+                     "deficit_water_management", "water_stress_mitigation"]
+        }
+      }
+    },
+    "soil_water_conservation_management": {
+      "label": "Soil & Water Conservation Management",
+      "subdomains": {
+        "soil_conservation": {
+          "topics": ["soil_erosion", "sheet_erosion", "rill_erosion", "gully_erosion",
+                     "wind_erosion", "soil_loss_reduction"]
+        },
+        "water_conservation": {
+          "topics": ["rainwater_harvesting", "water_harvesting_structures",
+                     "water_storage", "groundwater_recharge", "water_conservation_practices"]
+        },
+        "runoff_management": {
+          "topics": ["runoff_reduction", "runoff_control", "contour_measures", "flow_control"]
+        },
+        "conservation_practices": {
+          "topics": ["contour_farming", "contour_bunding", "terracing", "check_dams",
+                     "farm_ponds", "grassed_waterways", "mulching", "cover_crops",
+                     "conservation_tillage"]
+        },
+        "watershed_conservation": {
+          "topics": ["watershed_management", "catchment_treatment",
+                     "soil_water_conservation_structures", "community_water_conservation"]
+        },
+        "land_degradation_control": {
+          "topics": ["land_restoration", "degraded_land_management",
+                     "soil_restoration", "desertification_control"]
+        },
+        "sustainable_soil_water_resource_management": {
+          "topics": ["integrated_soil_water_management", "resource_conservation",
+                     "sustainable_land_management"]
+        }
+      }
+    }
+  },
+  "concept_aliases": {
+    "soil_organic_carbon": ["soc", "soil organic carbon", "soil c", "organic carbon in soil"],
+    "organic_carbon": ["organic carbon", "oc", "soc"],
+    "electrical_conductivity": ["ec", "electrical conductivity", "soil salinity ec"],
+    "ph": ["ph", "soil ph", "soil reaction"],
+    "water_use_efficiency": ["wue", "water use efficiency", "water-use efficiency", "irrigation water use efficiency", "iwue"],
+    "evapotranspiration": ["et", "evapotranspiration", "reference evapotranspiration", "eto", "etc", "crop evapotranspiration"],
+    "crop_water_stress_index": ["cwsi", "crop water stress index"],
+    "bulk_density": ["bd", "bulk density"],
+    "field_capacity": ["fc", "field capacity"],
+    "wilting_point": ["wp", "permanent wilting point", "wilting point"],
+    "nitrogen": ["n", "nitrogen", "total nitrogen"],
+    "phosphorus": ["p", "phosphorus", "available phosphorus"],
+    "potassium": ["k", "potassium", "available potassium"],
+    "cec": ["cec", "cation exchange capacity"],
+    "drip_irrigation": ["drip irrigation", "trickle irrigation", "micro-irrigation drip"],
+    "sprinkler_irrigation": ["sprinkler irrigation", "overhead irrigation"],
+    "flood_irrigation": ["flood irrigation", "basin irrigation"],
+    "furrow_irrigation": ["furrow irrigation"],
+    "contour_bunding": ["contour bunding", "contour bund", "contour bunds"],
+    "check_dams": ["check dam", "check dams"],
+    "rainwater_harvesting": ["rainwater harvesting", "rain water harvesting", "rwh"],
+    "groundwater_recharge": ["groundwater recharge", "aquifer recharge", "artificial recharge"],
+    "runoff": ["runoff", "surface runoff"],
+    "soil_moisture": ["soil moisture", "soil water content", "volumetric water content", "vwc"]
+  },
+  "context_vocabularies": {
+    "soil_types": ["clay", "sandy", "loamy", "silt", "clay loam", "sandy loam",
+                   "silty clay", "black cotton soil", "red soil", "laterite",
+                   "alluvial", "vertisol", "inceptisol", "alfisol", "entisol"],
+    "crops": ["rice", "wheat", "maize", "cotton", "sugarcane", "soybean",
+              "groundnut", "sunflower", "mustard", "barley", "jowar", "bajra",
+              "ragi", "pulses", "lentil", "chickpea", "pigeon pea", "potato",
+              "tomato", "onion", "chilli", "vegetables", "fruits"],
+    "seasons": ["kharif", "rabi", "zaid", "summer", "monsoon", "winter", "pre-kharif"],
+    "irrigation_methods": ["drip", "sprinkler", "furrow", "flood", "canal", "borewell",
+                            "rainfed", "micro-irrigation", "sub-surface", "basin irrigation"],
+    "locations": ["punjab", "haryana", "uttar pradesh", "maharashtra", "gujarat",
+                  "rajasthan", "madhya pradesh", "karnataka", "andhra pradesh",
+                  "telangana", "tamil nadu", "kerala", "west bengal", "odisha",
+                  "bihar", "jharkhand", "assam", "himachal", "uttarakhand",
+                  "indo-gangetic", "deccan", "coastal"],
+    "agro_climatic_zones": ["semi-arid", "arid", "sub-humid", "humid", "temperate", "tropical", "sub-tropical"]
+  },
+  "importance_signals": {
+    "boost_terms": ["increased", "decreased", "improved", "reduced", "significantly",
+                    "resulted in", "affected", "optimal", "threshold", "recommended",
+                    "required", "maximum", "minimum", "compared with", "compared to",
+                    "treatment", "control", "water requirement", "soil moisture",
+                    "irrigation interval", "yield", "soil loss", "runoff",
+                    "evapotranspiration", "correlated", "significant"],
+    "section_weights": {
+      "abstract": 1.4,
+      "results": 1.5,
+      "conclusion": 1.5,
+      "discussion": 1.2,
+      "recommendation": 1.4,
+      "findings": 1.4,
+      "introduction": 0.8,
+      "methodology": 0.9,
+      "materials_and_methods": 0.9,
+      "references": 0.1,
+      "acknowledgement": 0.1,
+      "unknown": 1.0
+    }
+  }
+}

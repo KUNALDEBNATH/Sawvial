@@ -1,0 +1,15 @@
+{
+  "embedding": {
+    "model_name": "tfidf",
+    "offline": true,
+    "dimension": 768,
+    "normalize": true
+  },
+  "faiss_index_type": "IndexFlatIP (exact cosine, vectors L2-normalized)",
+  "n_vectors": 15752,
+  "dimension": 768,
+  "dataset_stats_summary": {
+    "total_knowledge_units": 15764,
+    "validated": 6432
+  }
+}
