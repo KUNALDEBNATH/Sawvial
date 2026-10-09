@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SAWVIAL — Your farming questions, answered simply</title>
+<meta name="description" content="SAWVIAL is a voice-first, multilingual agricultural assistant. Speak your farming question and get simple, research-based guidance." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="css/landing.css" />
+</head>
+<body class="lp">
+
+<header class="lp-nav" id="lp-nav">
+  <div class="lp-nav-inner">
+    <a href="index.html" class="lp-brand">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M12 21.5C12 21.5 4.5 16.6 4.5 10.3C4.5 5.9 7.9 2.5 12 2.5C16.1 2.5 19.5 5.9 19.5 10.3C19.5 16.6 12 21.5 12 21.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+        <path d="M12 17.5V7.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        <path d="M12 11C12 11 8.8 10.4 8.8 7.6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+        <path d="M12 14.2C12 14.2 15.2 13.6 15.2 10.8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+      </svg>
+      SAWVIAL
+    </a>
+    <button class="lp-nav-toggle" id="lp-nav-toggle" aria-expanded="false" data-i18n-aria="nav.menu" aria-label="Open menu">☰</button>
+    <nav class="lp-nav-links" id="lp-nav-links" aria-label="Main navigation">
+      <a href="#what" data-i18n="nav.whatAsk">What you can ask</a>
+      <a href="#how" data-i18n="nav.how">How it works</a>
+      <a href="language.html?redirect=index.html" data-i18n="nav.language">Language</a>
+      <a href="help.html" data-i18n="nav.help">Help</a>
+      <a href="ask.html" class="lp-nav-cta" data-i18n="nav.ask">Ask SAWVIAL</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+  <!-- HERO -->
+  <section class="lp-hero">
+    <div class="lp-hero-media">
+      <img src="https://images.unsplash.com/photo-1530507629858-e4977d30e9e0?auto=format&fit=crop&w=2000&q=80"
+           alt="A farmer harvesting rice in a green paddy field" fetchpriority="high" />
+    </div>
+    <div class="lp-hero-inner">
+      <span class="lp-eyebrow" data-i18n="hero.eyebrow">Research-based agricultural guidance</span>
+      <h1 data-i18n-html="hero.title">Your farming questions. <em>Our research-based answers.</em></h1>
+      <p class="lp-hero-sub" data-i18n="hero.sub">Speak naturally in your own language.</p>
+      <div class="lp-hero-actions">
+        <a href="ask.html" class="lp-btn lp-btn-light">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Z" fill="currentColor"/><path d="M19 11a7 7 0 0 1-14 0M12 18v3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <span data-i18n="nav.ask">Ask SAWVIAL</span>
+        </a>
+        <a href="#how" class="lp-btn lp-btn-ghost" data-i18n="hero.cta2">See how it works</a>
+      </div>
+      <div class="lp-hero-stats">
+        <div class="lp-stat"><strong data-i18n="hero.stat1n">7</strong><span data-i18n="hero.stat1">Indian languages supported</span></div>
+        <div class="lp-stat"><strong data-i18n="hero.stat2n">Voice</strong><span data-i18n="hero.stat2">No typing, no literacy barrier</span></div>
+        <div class="lp-stat"><strong data-i18n="hero.stat3n">Free</strong><span data-i18n="hero.stat3">For every farmer, always</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- TOPICS -->
+  <section class="lp-section" id="what">
+    <div class="wrap">
+      <div class="lp-head reveal">
+        <span class="lp-kicker" data-i18n="nav.whatAsk">What you can ask</span>
+        <h2 data-i18n="topics.title">Everyday questions from the field</h2>
+        <p data-i18n="topics.sub">Ask anything you would ask an agricultural officer.</p>
+      </div>
+      <div class="lp-topics">
+        <a class="lp-topic reveal" href="ask.html?topic=crop">
+          <img src="https://images.unsplash.com/photo-1528693404014-b13ebe6e723e?auto=format&fit=crop&w=800&q=80" alt="Farmer standing in a rice field" loading="lazy" />
+          <span class="lp-topic-arrow" aria-hidden="true">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <div class="lp-topic-body">
+            <h3 data-i18n="topic.crop">Crops</h3>
+            <p data-i18n="topics.cropDesc">Sowing time, spacing, varieties and what your plants are telling you.</p>
+          </div>
+        </a>
+        <a class="lp-topic reveal" href="ask.html?topic=water">
+          <img src="https://images.unsplash.com/photo-1542911882-c7100ccf771b?auto=format&fit=crop&w=800&q=80" alt="Flooded paddy field with a person walking along the bund" loading="lazy" />
+          <span class="lp-topic-arrow" aria-hidden="true">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <div class="lp-topic-body">
+            <h3 data-i18n="topic.water">Water</h3>
+            <p data-i18n="topics.waterDesc">When to irrigate, how much, and how to lose less to the sun.</p>
+          </div>
+        </a>
+        <a class="lp-topic reveal" href="ask.html?topic=soil">
+          <img src="https://images.unsplash.com/photo-1620901433789-1d2f85a93653?auto=format&fit=crop&w=800&q=80" alt="Farmer ploughing a field with a pair of oxen" loading="lazy" />
+          <span class="lp-topic-arrow" aria-hidden="true">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <div class="lp-topic-body">
+            <h3 data-i18n="topic.soil">Soil</h3>
+            <p data-i18n="topics.soilDesc">Organic matter, manure, rotation and keeping structure healthy.</p>
+          </div>
+        </a>
+        <a class="lp-topic reveal" href="ask.html?topic=pest">
+          <img src="https://images.unsplash.com/photo-1633410195091-bd66114cef5f?auto=format&fit=crop&w=800&q=80" alt="Group of farmers inspecting a crop together" loading="lazy" />
+          <span class="lp-topic-arrow" aria-hidden="true">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <div class="lp-topic-body">
+            <h3 data-i18n="topic.pest">Pests</h3>
+            <p data-i18n="topics.pestDesc">Identify the problem early and treat only what actually needs treating.</p>
+          </div>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- HOW IT WORKS -->
+  <section class="lp-section" id="how" style="background:#fff;border-block:1px solid var(--line);">
+    <div class="wrap">
+      <div class="lp-steps-grid">
+        <div class="lp-steps-photo reveal">
+          <img src="https://images.unsplash.com/photo-1559884743-74a57598c6c7?auto=format&fit=crop&w=1000&q=80" alt="Farmer carrying a basket through a rice field" loading="lazy" />
+          <div class="lp-steps-badge">
+            <span class="dot"></span>
+            <span data-i18n="how.badge">Works on a basic smartphone.</span>
+          </div>
+        </div>
+        <div class="reveal">
+          <div class="lp-head" style="margin-bottom:12px;">
+            <span class="lp-kicker" data-i18n="nav.how">How it works</span>
+            <h2 data-i18n="how.title">Three steps. No forms to fill.</h2>
+          </div>
+          <div class="lp-step">
+            <span class="lp-step-num">01</span>
+            <div>
+              <h3 data-i18n="how.s1t">Pick your language</h3>
+              <p data-i18n="how.s1d">Chosen once, remembered after that.</p>
+            </div>
+          </div>
+          <div class="lp-step">
+            <span class="lp-step-num">02</span>
+            <div>
+              <h3 data-i18n="how.s2t">Speak your question</h3>
+              <p data-i18n="how.s2d">Tap the microphone and talk the way you normally would.</p>
+            </div>
+          </div>
+          <div class="lp-step">
+            <span class="lp-step-num">03</span>
+            <div>
+              <h3 data-i18n="how.s3t">Get a clear answer</h3>
+              <p data-i18n="how.s3d">A short, practical reply appears right below your question.</p>
+            </div>
+          </div>
+          <div style="margin-top:28px;">
+            <a href="ask.html" class="lp-btn lp-btn-dark" data-i18n="how.cta">Try it now</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- LANGUAGES -->
+  <section class="lp-section tight" id="languages">
+    <div class="wrap">
+      <div class="lp-langs reveal">
+        <div>
+          <span class="lp-kicker" style="color:var(--leaf-soft);" data-i18n="nav.languages">Languages</span>
+          <h2 data-i18n="langs.title">Answers in the language you think in</h2>
+          <p data-i18n="langs.sub">Every answer is written in your own language.</p>
+        </div>
+        <div class="lp-lang-chips">
+          <a class="lp-lang-chip" href="language.html?redirect=ask.html">हिन्दी<small>Hindi</small></a>
+          <a class="lp-lang-chip" href="language.html?redirect=ask.html">বাংলা<small>Bengali</small></a>
+          <a class="lp-lang-chip" href="language.html?redirect=ask.html">தமிழ்<small>Tamil</small></a>
+          <a class="lp-lang-chip" href="language.html?redirect=ask.html">తెలుగు<small>Telugu</small></a>
+          <a class="lp-lang-chip" href="language.html?redirect=ask.html">ಕನ್ನಡ<small>Kannada</small></a>
+          <a class="lp-lang-chip" href="language.html?redirect=ask.html">मराठी<small>Marathi</small></a>
+          <a class="lp-lang-chip" href="language.html?redirect=ask.html">English</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- TRUST -->
+  <section class="lp-section" style="background:#fff;border-block:1px solid var(--line);">
+    <div class="wrap">
+      <div class="lp-split">
+        <div class="reveal">
+          <span class="lp-kicker" data-i18n="trust.kicker">Why farmers trust it</span>
+          <h2 style="font-size:clamp(2rem,3.6vw,2.9rem);margin-bottom:18px;" data-i18n="trust.title">Built from agricultural research, spoken like a neighbour</h2>
+          <p style="color:var(--ink-2);opacity:.8;" data-i18n="trust.sub">SAWVIAL draws on published agronomic guidance.</p>
+          <ul class="lp-check-list">
+            <li>
+              <svg viewBox="0 0 24 24" fill="none"><path d="M4 12.5 9 17.5 20 6.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span data-i18n="trust.p1">Grounded in research and extension guidance, not guesswork</span>
+            </li>
+            <li>
+              <svg viewBox="0 0 24 24" fill="none"><path d="M4 12.5 9 17.5 20 6.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span data-i18n="trust.p2">Answers you can act on with what you already have</span>
+            </li>
+            <li>
+              <svg viewBox="0 0 24 24" fill="none"><path d="M4 12.5 9 17.5 20 6.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span data-i18n="trust.p3">Tells you when to check with a local expert instead of guessing</span>
+            </li>
+            <li>
+              <svg viewBox="0 0 24 24" fill="none"><path d="M4 12.5 9 17.5 20 6.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span data-i18n="trust.p4">Your questions stay on your device — nothing is sold on</span>
+            </li>
+          </ul>
+        </div>
+        <div class="lp-split-photo reveal">
+          <img src="https://images.unsplash.com/photo-1696371269544-e2601fd835f5?auto=format&fit=crop&w=1000&q=80" alt="Farmers walking together across a green field" loading="lazy" />
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- QUOTE -->
+  <section class="lp-section tight lp-quote">
+    <div class="wrap">
+      <figure class="reveal">
+        <blockquote data-i18n="quote.text">Quote</blockquote>
+        <figcaption data-i18n="quote.by">— Paddy farmer, Coimbatore district</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="lp-cta">
+    <img src="https://images.unsplash.com/photo-1574943320219-553eb213f72d?auto=format&fit=crop&w=2000&q=80" alt="Farmer driving a tractor across a field at golden hour" loading="lazy" />
+    <div class="wrap">
+      <h2 data-i18n="cta.title">Have a farming question right now?</h2>
+      <p data-i18n="cta.sub">Tap once, speak, and read the answer below your question.</p>
+      <a href="ask.html" class="lp-btn lp-btn-light">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Z" fill="currentColor"/><path d="M19 11a7 7 0 0 1-14 0M12 18v3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        <span data-i18n="nav.ask">Ask SAWVIAL</span>
+      </a>
+    </div>
+  </section>
+
+</main>
+
+<footer class="lp-footer">
+  <div class="wrap">
+    <div class="lp-footer-grid">
+      <div>
+        <div class="lp-footer-brand">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 21.5C12 21.5 4.5 16.6 4.5 10.3C4.5 5.9 7.9 2.5 12 2.5C16.1 2.5 19.5 5.9 19.5 10.3C19.5 16.6 12 21.5 12 21.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+            <path d="M12 17.5V7.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          SAWVIAL
+        </div>
+        <p style="max-width:34ch;" data-i18n="footer.tagline">Soil · Water · Farmers.</p>
+      </div>
+      <div>
+        <h4 data-i18n="footer.product">Product</h4>
+        <ul>
+          <li><a href="ask.html" data-i18n="nav.ask">Ask SAWVIAL</a></li>
+          <li><a href="language.html?redirect=index.html" data-i18n="nav.languages">Languages</a></li>
+          <li><a href="help.html" data-i18n="footer.howto">How to use</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4 data-i18n="footer.topics">Topics</h4>
+        <ul>
+          <li><a href="ask.html?topic=crop" data-i18n="topic.crop">Crops</a></li>
+          <li><a href="ask.html?topic=water" data-i18n="topic.water">Water</a></li>
+          <li><a href="ask.html?topic=soil" data-i18n="topic.soil">Soil</a></li>
+          <li><a href="ask.html?topic=pest" data-i18n="topic.pest">Pests</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4 data-i18n="footer.company">Company</h4>
+        <ul>
+          <li><a href="#" data-i18n="footer.privacy">Privacy</a></li>
+          <li><a href="#" data-i18n="footer.terms">Terms</a></li>
+          <li><a href="#" data-i18n="footer.contact">Contact</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="lp-footer-bottom">
+      <span data-i18n="footer.rights">© 2026 SAWVIAL. All rights reserved.</span>
+      <span data-i18n="footer.photos">Photography: Unsplash</span>
+    </div>
+  </div>
+</footer>
+
+<script src="js/script.js"></script>
+<script src="js/i18n.js"></script>
+<script>
+  (function () {
+    var nav = document.getElementById("lp-nav");
+    var toggle = document.getElementById("lp-nav-toggle");
+    var links = document.getElementById("lp-nav-links");
+
+    function onScroll() {
+      nav.classList.toggle("solid", window.scrollY > 40);
+    }
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+
+    toggle.addEventListener("click", function () {
+      var open = links.classList.toggle("open");
+      toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    });
+
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (e.isIntersecting) {
+          e.target.classList.add("in");
+          io.unobserve(e.target);
+        }
+      });
+    }, { threshold: 0.12 });
+
+    document.querySelectorAll(".reveal").forEach(function (el, i) {
+      el.style.transitionDelay = (i % 4) * 80 + "ms";
+      io.observe(el);
+    });
+  })();
+</script>
+</body>
+</html>

@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title data-i18n="lang.title">Choose your language — SAWVIAL</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="css/landing.css" />
+</head>
+<body class="lp">
+
+<header class="lp-nav solid" id="lp-nav">
+  <div class="lp-nav-inner">
+    <a href="index.html" class="lp-brand">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M12 21.5C12 21.5 4.5 16.6 4.5 10.3C4.5 5.9 7.9 2.5 12 2.5C16.1 2.5 19.5 5.9 19.5 10.3C19.5 16.6 12 21.5 12 21.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+        <path d="M12 17.5V7.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+      SAWVIAL
+    </a>
+    <button class="lp-nav-toggle" id="lp-nav-toggle" aria-expanded="false" aria-label="Open menu">☰</button>
+    <nav class="lp-nav-links" id="lp-nav-links" aria-label="Main navigation">
+      <a href="index.html" data-i18n="nav.home">Home</a>
+      <a href="help.html" data-i18n="nav.help">Help</a>
+      <a href="ask.html" class="lp-nav-cta" data-i18n="nav.ask">Ask SAWVIAL</a>
+    </nav>
+  </div>
+</header>
+
+<main class="lp-page">
+  <div class="wrap">
+    <a class="lp-back" href="index.html">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M19 12H5M11 6l-6 6 6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span data-i18n="common.back">Back</span>
+    </a>
+
+    <div class="lp-page-head">
+      <span class="lp-kicker" data-i18n="lang.step">Step 1 of 2</span>
+      <h1 data-i18n="lang.title">Choose your language</h1>
+      <p data-i18n="lang.sub">Pick the language you are most comfortable speaking.</p>
+    </div>
+
+    <div class="language-grid" role="group" aria-label="Available languages">
+      <button type="button" class="language-card" data-lang="hi" aria-pressed="false">
+        <span class="language-native">हिन्दी</span>
+        <span class="language-name">Hindi</span>
+        <span class="language-check" data-i18n="lang.selected">✓ Selected</span>
+      </button>
+      <button type="button" class="language-card" data-lang="bn" aria-pressed="false">
+        <span class="language-native">বাংলা</span>
+        <span class="language-name">Bengali</span>
+        <span class="language-check" data-i18n="lang.selected">✓ Selected</span>
+      </button>
+      <button type="button" class="language-card" data-lang="ta" aria-pressed="false">
+        <span class="language-native">தமிழ்</span>
+        <span class="language-name">Tamil</span>
+        <span class="language-check" data-i18n="lang.selected">✓ Selected</span>
+      </button>
+      <button type="button" class="language-card" data-lang="te" aria-pressed="false">
+        <span class="language-native">తెలుగు</span>
+        <span class="language-name">Telugu</span>
+        <span class="language-check" data-i18n="lang.selected">✓ Selected</span>
+      </button>
+      <button type="button" class="language-card" data-lang="kn" aria-pressed="false">
+        <span class="language-native">ಕನ್ನಡ</span>
+        <span class="language-name">Kannada</span>
+        <span class="language-check" data-i18n="lang.selected">✓ Selected</span>
+      </button>
+      <button type="button" class="language-card" data-lang="mr" aria-pressed="false">
+        <span class="language-native">मराठी</span>
+        <span class="language-name">Marathi</span>
+        <span class="language-check" data-i18n="lang.selected">✓ Selected</span>
+      </button>
+      <button type="button" class="language-card" data-lang="en" aria-pressed="false">
+        <span class="language-native">English</span>
+        <span class="language-name">English</span>
+        <span class="language-check" data-i18n="lang.selected">✓ Selected</span>
+      </button>
+    </div>
+
+    <div class="lp-page-actions">
+      <button type="button" id="language-continue" class="lp-btn lp-btn-dark" data-i18n="lang.continue" disabled>Continue</button>
+    </div>
+  </div>
+</main>
+
+<script src="js/script.js"></script>
+<script src="js/i18n.js"></script>
+<script>
+  (function () {
+    var t = document.getElementById("lp-nav-toggle");
+    var l = document.getElementById("lp-nav-links");
+    t.addEventListener("click", function () {
+      var open = l.classList.toggle("open");
+      t.setAttribute("aria-expanded", open ? "true" : "false");
+    });
+  })();
+</script>
+</body>
+</html>
