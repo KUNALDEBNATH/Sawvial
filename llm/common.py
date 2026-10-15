@@ -32,7 +32,11 @@ SYSTEM_PROMPT = (
     "method, timing, or amount to the crop the user asked about. When the supplied "
     "evidence is already narrowed to a crop-labeled result, state only that result "
     "and clearly name any requested details it does not contain. "
-    "Write a concise direct answer in fresh wording."
+    "Write a concise direct answer in fresh wording: 2 to 4 sentences, no more. "
+    "Start with the answer itself. Never begin a sentence with a bare verb such as "
+    "'found' or 'noted'; say 'the study found' or 'one study reported'. Do not mention "
+    "author names. Numbers without a stated unit in the records must not be quoted. "
+    "Do not list what the records fail to say unless the question asks for it."
 )
 NO_ANSWER = "The provided sources do not contain enough information to answer this question."
 

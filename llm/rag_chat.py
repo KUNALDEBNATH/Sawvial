@@ -83,6 +83,18 @@ def _focus_crop_labeled_evidence(
     return ("; ".join(segments), True) if segments else (evidence, False)
 
 
+_TEMPLATED_FINDING = re.compile(
+    r"^\s*(?:a (?:range|value) of\b|findings? relate to\b)", re.I)
+
+
+def _clean_finding(finding):
+    """Auto-generated findings ("a range of 2.0-3.0 was reported") carry no units or
+    meaning and make the LLM quote misleading numbers, so they are not shown to it."""
+    if not finding or _TEMPLATED_FINDING.match(str(finding)):
+        return None
+    return finding
+
+
 def load_retriever(index_dir, dataset_dir):
     bundle = load_index_bundle(index_dir, dataset_dir)
     meta = bundle["index_meta"]["embedding"]
@@ -198,7 +210,7 @@ def get_passages(bundle, embedder, question, top_k):
         out.append({"id": r["knowledge_unit_id"], "title": title,
                     "page": r["provenance"].get("page"), "section": r["provenance"].get("section"),
                     "text": focused_text,
-                    "finding": None if crop_focused else r["finding"],
+                    "finding": None if crop_focused else _clean_finding(r["finding"]),
                     "recommendation": None if crop_focused else r["recommendation"],
                     "context": passage_context,
                     "structured_facts": [] if crop_focused else r["structured_facts"],
@@ -257,7 +269,7 @@ def answer(tok, model, question, passages, max_new_tokens, history=None,
 
         stopping_criteria = StoppingCriteriaList([CancelOnEvent()])
     out = model.generate(**ids, max_new_tokens=max_new_tokens, do_sample=True,
-                         temperature=0.35, top_p=0.9, repetition_penalty=1.1,
+                         temperature=0.35, top_p=0.9, repetition_penalty=1.0,
                          pad_token_id=tok.pad_token_id or tok.eos_token_id,
                          stopping_criteria=stopping_criteria)
     return tok.decode(out[0][ids["input_ids"].shape[1]:], skip_special_tokens=True).strip()

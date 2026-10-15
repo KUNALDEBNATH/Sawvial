@@ -43,7 +43,13 @@ NO_DATA_ANSWER = (
     "dataset. Try asking about crops, soil, irrigation, water use, or "
     "soil/water conservation."
 )
-MIN_RETRIEVAL_SCORE = 0.11
+# TF-IDF (offline) cosine scores for good matches are typically 0.05-0.25, so the old
+# 0.11 cut-off rejected most normal farmer questions. get_passages() already requires
+# real term overlap, so this only needs to drop near-zero matches.
+MIN_RETRIEVAL_SCORE = 0.03
+# if the LLM says "not enough information" but retrieval was this strong, show the
+# best passage instead of a dead-end message.
+STRONG_RETRIEVAL_SCORE = 0.08
 AGRICULTURE_TERMS = re.compile(
     r"\b(agricultur\w*|agronom\w*|farm(?:s|ing)?|crop(?:s|ping)?|potato(?:es)?|"
     r"soil|water|irrigat\w*|rainfed|rainfall|drought|watershed|"
@@ -51,7 +57,15 @@ AGRICULTURE_TERMS = re.compile(
     r"erosion|runoff|groundwater|recharge|tillage|mulch\w*|compost|"
     r"salinity|saline|pH|yield\w*|water[\s-]*use efficiency|WUE|"
     r"evapotranspiration|water productivity|soil moisture|soil health|"
-    r"pest\w*|crop disease|plant disease|soil organic carbon)\b",
+    r"pest\w*|crop disease|plant disease|soil organic carbon|"
+    r"rice|paddy|wheat|maize|corn|millet\w*|sorghum|barley|cotton|sugarcane|"
+    r"soybean|soyabean|groundnut|chickpea|pulses?|lentil|mustard|jute|tea|coffee|"
+    r"tomato(?:es)?|onion|cabbage|brinjal|chil(?:l)?i|vegetable\w*|fruit\w*|"
+    r"banana|mango|orchard|paddy|plant(?:s|ing|ation)?|seed(?:s|ling\w*)?|"
+    r"sow(?:n|ing)?|harvest\w*|grow(?:ing)?|cultivat\w*|weed\w*|"
+    r"herbicide\w*|pesticide\w*|insecticide\w*|fungicide\w*|insect\w*|"
+    r"disease\w*|fertili[sz]er\w*|biochar|organic|livestock|field|land|"
+    r"drip|sprinkler|mulch|rainwater|moisture|climate|season\w*)\b",
     re.I,
 )
 GREETING = re.compile(
@@ -59,18 +73,77 @@ GREETING = re.compile(
     r"thanks|thank you|ok|okay|yes|no)[.! ]*$",
     re.I,
 )
-FOLLOW_UP = re.compile(
+FOLLOW_UP_OPENER = re.compile(
     r"^(?:and\b|what about\b|how about\b|why\b|how so\b|"
     r"explain (?:more|that|this|it)\b|tell me more\b|"
-    r"can you explain\b|could you explain\b)|\b("
-    r"it|they|them|this|that|these|those|there|such a|such an|"
-    r"one line|single line|short(?:er)?|brief(?:ly)?|concise|"
-    r"summarize|summarise|bullet points?)\b|"
-    r"^\s*how\s+to\s+use\s+(?:the\s+)?(?:water|it)\b.*\b"
-    r"(?:benefit|help|good)\b",
+    r"can you explain\b|could you explain\b)",
     re.I,
 )
-CITE = re.compile(r"\s*\[([A-Z]+_\d+)\]")
+FOLLOW_UP_WORDS = re.compile(
+    r"\b(it|they|them|this|that|these|those|there|such a|such an|"
+    r"one line|single line|short(?:er)?|brief(?:ly)?|concise|"
+    r"summarize|summarise|bullet points?)\b",
+    re.I,
+)
+CITE = re.compile(r"\s*\[\s*([A-Z]+_\d+(?:\s*[,;]\s*[A-Z]+_\d+)*)\s*\]")
+CITE_ID = re.compile(r"[A-Z]+_\d+")
+
+
+def find_citations(text: str) -> set:
+    return {i for group in CITE.findall(text) for i in CITE_ID.findall(group)}
+
+
+def strip_citations(text: str, valid_ids: Optional[set] = None) -> str:
+    """Remove [ID] markers from the visible answer (valid or not)."""
+    return re.sub(r"[ \t]+([.,;:!?])", r"\1", CITE.sub("", text)).strip()
+
+
+_FALLBACK_STOP = {
+    "the", "and", "for", "with", "that", "this", "what", "when", "where", "which",
+    "how", "does", "did", "can", "should", "would", "could", "about", "into", "from",
+    "have", "has", "are", "was", "were", "you", "your", "my", "our", "its", "any",
+    "much", "many", "best", "good", "need", "use", "tell", "give", "show", "make",
+}
+
+
+def _terms(text: str) -> set:
+    out = set()
+    for w in re.findall(r"[a-z]{3,}", text.lower()):
+        if w in _FALLBACK_STOP:
+            continue
+        if w.endswith("ies") and len(w) > 4:
+            w = w[:-3] + "y"
+        elif w.endswith("s") and len(w) > 4:
+            w = w[:-1]
+        out.add(w)
+    return out
+
+
+def extractive_answer(question: str, passages: list):
+    """Grounded fallback when the LLM output is unusable.
+
+    Picks the evidence sentences that overlap most with the question and quotes them
+    with the passage id. Returns None when nothing in the passages really matches.
+    """
+    q_terms = _terms(question)
+    best = None  # (score, passage, sentences)
+    for rank, p in enumerate(passages):
+        text = re.sub(r"\s+", " ", (p.get("text") or "")).strip()
+        sents = [x.strip() for x in re.split(r"(?<=[.!?])\s+", text) if len(x.strip()) > 25]
+        for i, sent in enumerate(sents):
+            score = len(q_terms & _terms(sent)) - rank * 0.05
+            if best is None or score > best[0]:
+                best = (score, p, sents[i:i + 2])
+    if not best or best[0] < 1:
+        return None
+    _, passage, sents = best
+    out = " ".join(sents)
+    if len(out) > 480:
+        out = sents[0][:480].rsplit(" ", 1)[0]
+    if out and out[-1] not in ".!?":
+        out += "..."
+    return f"According to the research records: {out} [{passage['id']}]", passage
+
 
 NLLB = {"en": "eng_Latn", "bn": "ben_Beng", "hi": "hin_Deva", "as": "asm_Beng",
         "ta": "tam_Taml", "te": "tel_Telu", "mr": "mar_Deva", "ml": "mal_Mlym",
@@ -140,7 +213,16 @@ def is_agriculture_question(question: str, bundle: dict) -> bool:
 
 
 def is_follow_up(question: str) -> bool:
-    return bool(FOLLOW_UP.search(question.strip()))
+    """A follow-up is a short message that leans on the previous turn.
+
+    Pronoun-like words ("this week", "that field") inside a normal, self-contained
+    question must NOT make it a follow-up, otherwise the previous topic gets mixed
+    into the retrieval query and the answer comes back unrelated or empty.
+    """
+    q = question.strip()
+    if FOLLOW_UP_OPENER.search(q):
+        return True
+    return len(q.split()) <= 7 and bool(FOLLOW_UP_WORDS.search(q))
 
 
 def is_formatting_request(question: str) -> bool:
@@ -381,6 +463,17 @@ def dataset_crop_summary(question: str, bundle: dict) -> Optional[tuple[str, lis
     return answer, sources
 
 
+def safe_translate(tr, text: str, src: str, tgt: str) -> str:
+    """Translate, but never fail the whole request if the translator errors."""
+    if not tr or not text:
+        return text
+    try:
+        return tr.translate(text, src, tgt)
+    except Exception as exc:
+        print(f"Translation {src}->{tgt} failed: {exc}", file=sys.stderr)
+        return text
+
+
 def run_ask(question: str, lang: str, top_k: int, history: Optional[List[ChatTurn]] = None,
              cancel_event: Optional[threading.Event] = None) -> dict:
     t0 = time.time()
@@ -405,15 +498,15 @@ def run_ask(question: str, lang: str, top_k: int, history: Optional[List[ChatTur
     prior_turns.reverse()
     with LOCK:
         if lang != "en" and tr:
-            q_en = tr.translate(question, NLLB[lang], "eng_Latn"); translated = True
+            q_en = safe_translate(tr, question, NLLB[lang], "eng_Latn"); translated = True
             prior_turns = [
                 {"role": turn["role"],
-                 "content": tr.translate(turn["content"], NLLB[lang], "eng_Latn")}
+                 "content": safe_translate(tr, turn["content"], NLLB[lang], "eng_Latn")}
                 for turn in prior_turns
             ]
 
         def direct_response(text: str) -> dict:
-            out_text = tr.translate(text, "eng_Latn", NLLB[lang]) if lang != "en" and tr else text
+            out_text = safe_translate(tr, text, "eng_Latn", NLLB[lang]) if lang != "en" else text
             return {
                 "answer": out_text,
                 "language": lang,
@@ -438,7 +531,8 @@ def run_ask(question: str, lang: str, top_k: int, history: Optional[List[ChatTur
         summary = dataset_crop_summary(q_en, STATE["bundle"])
         if summary:
             clean, sources = summary
-            out_text = tr.translate(clean, "eng_Latn", NLLB[lang]) if lang != "en" and tr else clean
+            clean = strip_citations(clean)
+            out_text = safe_translate(tr, clean, "eng_Latn", NLLB[lang]) if lang != "en" else clean
             return {
                 "answer": out_text,
                 "language": lang,
@@ -458,7 +552,8 @@ def run_ask(question: str, lang: str, top_k: int, history: Optional[List[ChatTur
         crop_irrigation = crop_irrigation_summary(summary_question, passages)
         if crop_irrigation:
             clean, passage = crop_irrigation
-            out_text = tr.translate(clean, "eng_Latn", NLLB[lang]) if lang != "en" and tr else clean
+            clean = strip_citations(clean)
+            out_text = safe_translate(tr, clean, "eng_Latn", NLLB[lang]) if lang != "en" else clean
             return {
                 "answer": out_text,
                 "language": lang,
@@ -478,18 +573,31 @@ def run_ask(question: str, lang: str, top_k: int, history: Optional[List[ChatTur
         context_history = prior_turns if follow_up else []
         raw = rag.answer(STATE["tok"], STATE["model"], q_en, passages,
                          CFG["max_new_tokens"], history=context_history,
-                         cancel_event=cancel_event) if passages else NO_ANSWER
-        cited = set(CITE.findall(raw))
+                         cancel_event=cancel_event) or ""
+        if cancel_event is not None and cancel_event.is_set():
+            return direct_response("Stopped.")
         available_citations = {p["id"] for p in passages}
-        if cited and not cited.issubset(available_citations):
-            return direct_response(NO_DATA_ANSWER)
-        clean = CITE.sub("", raw).strip()
-        if not answer_matches_asked_crop(q_en, clean, passages):
+        cited = find_citations(raw) & available_citations      # ignore invented ids
+        clean = strip_citations(raw)
+        top_score = max(float(p["score"]) for p in passages)
+        fallback = extractive_answer(q_en, passages)
+
+        unusable = (
+            not clean
+            or (find_citations(raw) and not cited)              # only made-up citations
+            or not answer_matches_asked_crop(q_en, clean, passages)
+        )
+        says_no_info = clean.lower().startswith("the provided sources do not")
+        if fallback and (unusable or (says_no_info and top_score >= STRONG_RETRIEVAL_SCORE)):
+            clean, best = fallback
+            clean = strip_citations(clean)
+            cited = {best["id"]}
+        elif unusable:
             return direct_response(NO_DATA_ANSWER)
         grounded = bool(passages) and not clean.lower().startswith("the provided sources do not")
         out_text = clean
         if lang != "en" and tr:
-            out_text = tr.translate(clean, "eng_Latn", NLLB[lang])
+            out_text = safe_translate(tr, clean, "eng_Latn", NLLB[lang])
     res = {"answer": out_text, "language": lang, "grounded": grounded,
            "sources": [{"id": p["id"], "title": p["title"], "page": p["page"],
                         "score": round(float(p["score"]), 4), "cited": p["id"] in cited,
