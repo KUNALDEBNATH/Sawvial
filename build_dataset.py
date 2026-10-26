@@ -10,11 +10,15 @@ Usage
     # Build the canonical dataset AND the FAISS index in one go
     python build_dataset.py --input_dir ./papers --output_dir ./dataset --build-index
 
-    # Build the FAISS index later, from an already-built dataset
-    python build_dataset.py --output_dir ./dataset --index_dir ./index --build-index --skip-build
+    # (Re)build the retrieval index from an already-built dataset (lexical, fully local)
+    python build_dataset.py --skip-build --build-index
 
-    # Fully offline (no sentence-transformers download)
-    python build_dataset.py --input_dir ./papers --output_dir ./dataset --build-index --offline
+    # Same, plus an optional dense index for hybrid retrieval (needs sentence-transformers)
+    python build_dataset.py --skip-build --build-index --dense
+
+    # Add one or more PDFs to the existing dataset without a full rebuild, then re-index
+    python build_dataset.py --add_pdf new_paper.pdf --build-index
+    python build_dataset.py --add_pdf scanned.pdf --ocr --build-index   # optional OCR (needs Tesseract)
 
     # Query the index
     python build_dataset.py --output_dir ./dataset --index_dir ./index \\
@@ -34,9 +38,8 @@ import logging
 from pathlib import Path
 
 from sawvial.config import Taxonomy, BuildConfig, ChunkingConfig, ExtractionConfig, EmbeddingConfig
-from sawvial.pipeline import run_build, run_embed_and_index
+from sawvial.pipeline import run_add_pdfs, run_build, run_embed_and_index
 from sawvial.index.retriever import load_index_bundle, query as retrieve
-from sawvial.embeddings.embedder import load_embedder
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger("sawvial.cli")
@@ -53,10 +56,11 @@ def make_config(args) -> BuildConfig:
             min_importance_score=args.min_importance,
             review_importance_score=args.review_importance,
         ),
-        embedding=EmbeddingConfig(model_name=args.model, offline=args.offline),
+        embedding=EmbeddingConfig(model_name=args.model, offline=not args.dense),
         input_dir=args.input_dir,
         output_dir=args.output_dir,
         index_dir=args.index_dir,
+        ocr=args.ocr, ocr_language=args.ocr_language,
     )
 
 
@@ -115,10 +119,7 @@ def cmd_validate(args):
 
 def cmd_query(args):
     bundle = load_index_bundle(args.index_dir, args.output_dir)
-    embedder = load_embedder(bundle["index_meta"]["embedding"]["model_name"],
-                              bundle["index_meta"]["embedding"]["offline"])
-
-    results = retrieve(bundle, embedder, args.query, top_k=args.top_k)
+    results = retrieve(bundle, None, args.query, top_k=args.top_k)
 
     print("\n" + "─" * 70)
     print(f"Top-{args.top_k} results for: \"{args.query}\"")
@@ -141,7 +142,11 @@ def main():
     parser.add_argument("--index_dir", type=str, default="./index")
     parser.add_argument("--taxonomy", type=str, default=DEFAULT_TAXONOMY_PATH)
     parser.add_argument("--model", type=str, default="sentence-transformers/all-MiniLM-L6-v2")
-    parser.add_argument("--offline", action="store_true", help="Use TF-IDF embedder, no downloads.")
+    parser.add_argument("--offline", action="store_true", help="(default; lexical index only - kept for compatibility)")
+    parser.add_argument("--dense", action="store_true", help="Also build a dense sentence-transformers index (hybrid retrieval).")
+    parser.add_argument("--add_pdf", nargs="+", metavar="PDF", help="Add PDF(s) to the existing dataset incrementally.")
+    parser.add_argument("--ocr", action="store_true", help="OCR scanned pages (optional; needs Tesseract installed).")
+    parser.add_argument("--ocr_language", default="eng", help="Tesseract language code(s), e.g. eng or eng+hin")
     parser.add_argument("--min_importance", type=float, default=0.28)
     parser.add_argument("--review_importance", type=float, default=0.4)
 
@@ -161,6 +166,16 @@ def main():
 
     if args.validate:
         cmd_validate(args)
+        return
+
+    if args.add_pdf:
+        cfg = make_config(args)
+        result = run_add_pdfs(cfg, [Path(p) for p in args.add_pdf])
+        print(json.dumps({k: v for k, v in result.items() if k != "new_unit_ids"}, indent=2))
+        if args.build_index and result["units_added"]:
+            run_embed_and_index(cfg)
+        elif args.build_index:
+            log.info("No new units were added; index left unchanged.")
         return
 
     dataset_exists = (Path(args.output_dir) / "knowledge_units.jsonl").exists()

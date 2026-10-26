@@ -76,4 +76,12 @@ def generate_qa(ku: Dict[str, Any], max_pairs: int = 3) -> List[Dict[str, str]]:
         qa_pairs.append({"question": question.strip(), "answer": evidence,
                           "question_type": "factual"})
 
-    return qa_pairs[:max_pairs]
+    # Pairs are extractive templates, not verified facts: label them, and drop pairs that fail
+    # the basic checks (title-only answers, reference lists, empty/short answers, ...).
+    from sawvial.validation.qa_checks import is_hard, qa_issues
+    kept = []
+    for qa in qa_pairs[:max_pairs]:
+        qa["origin"], qa["verified"] = "template_from_evidence", False
+        if not is_hard(qa_issues(ku, qa)):
+            kept.append(qa)
+    return kept

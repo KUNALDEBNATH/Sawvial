@@ -1,4 +1,28 @@
-# SAWVIAL fixes (backend answer quality)
+# SAWVIAL change log
+
+## 2026-10 audit: grounding, retrieval, ingestion, research, frontend
+
+See README.md for usage. Summary of what changed and why (details in the final audit report):
+
+* **Adapter** loaded by default after a compatibility check; explicit `--base_only`; clear errors (`sawvial/model_config.py`, `llm/rag_chat.py`).
+* **Index** rebuilt as a persisted TF-IDF vectorizer + sparse matrix of *answerable records only*, atomic swap, staleness detection; the old
+  never-used `faiss.index` / `vectors.npy` (93 MB) are gone. Optional dense/hybrid via `--dense`.
+* **Eligibility** single rule (`sawvial/eligibility.py`) for build, index and runtime; `needs_review`/`evidence_only`/`pending_review`/`rejected` no longer answerable.
+* **Crop gating**: crop questions only get crop-specific evidence, otherwise "not enough evidence" (LLM not called).
+* **Grounding** (`sawvial/grounding.py`): citations must exist, sentences must be supported by the cited text incl. numbers; unsupported sentences removed.
+* **API**: metadata (authors/year/journal/DOI/URL/page) passed through, narrow inference lock, timings, validation, rate limit, CORS allow-list.
+* **Frontend**: random demo-question fallback removed, specific mic errors, retry, safe source links, answer-language-aware speech.
+* **PDF ingestion**: scanned/partial detection, optional OCR, table-error reporting, tables attached by reading position, ingestion report.
+* **Dataset**: QA checks (title-only, reference lists, off-topic, fragments), `tools/audit_dataset.py`, honest statistics, held-out split shared with evaluation.
+* **Research workflow** (`research_cli.py`, `sawvial/research/`): safe fetching, pending_review -> verified -> published.
+* **Evaluation/tests** rewritten; 100+ pytest tests.
+
+Removed on purpose: the hard-coded potato-irrigation answer (`crop_irrigation_summary`) and the dataset-wide crop summary that bypassed retrieval and
+the LLM and marked itself grounded; dead `demoAnswers` data in the frontend; unused `STRONG` score setting.
+
+---
+
+## Earlier fixes (backend answer quality)
 
 All in `api.py` and `llm/rag_chat.py`:
 

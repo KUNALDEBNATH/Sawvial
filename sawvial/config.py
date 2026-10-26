@@ -83,7 +83,7 @@ class ExtractionConfig:
 @dataclass
 class EmbeddingConfig:
     model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
-    offline: bool = False
+    offline: bool = True        # True = lexical (TF-IDF) index only; False = also build a dense index
     normalize: bool = True
     dimension: int = 0  # filled in after model load
 
@@ -97,6 +97,8 @@ class BuildConfig:
     input_dir: str = "./papers"
     output_dir: str = "./dataset"
     index_dir: str = "./index"
+    ocr: bool = False                # optional OCR for scanned PDFs (needs Tesseract)
+    ocr_language: str = "eng"
 
     def build_metadata(self) -> Dict[str, Any]:
         return {

@@ -15,3 +15,14 @@ env/
 .env
 .env.*
 !.env.example
+
+# SAWVIAL generated / local artifacts
+index.prev/
+index.building/
+eval_results/
+research_store/downloads/
+research_store/reports/
+node_modules/
+
+index/lexical_matrix.npz
+index/lexical_vectorizer.joblib

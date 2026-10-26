@@ -1,55 +1,69 @@
 #!/usr/bin/env python3
-"""SAWVIAL API: FastAPI server = FAISS retrieval + fine-tuned LLM (+ optional translation).
+"""SAWVIAL API: FastAPI server = index retrieval + fine-tuned LLM + grounding checks
+(+ optional translation and local speech synthesis).
 
-Put this file in the project root (next to build_dataset.py), then:
+    python api.py                 # real models (run `python tools/download_models.py` once first)
+    python api.py --mock          # canned answers, instant start (frontend testing only)
+    python api.py --no_translate  # English-only, skips the translation model
+    python api.py --base_only     # explicitly run the base model WITHOUT the LoRA adapter
 
-    python api.py                  # real model
-    python api.py --mock           # canned answers, instant start (for frontend testing)
-    python api.py --no_translate   # English-only, skips the translation model
-
-Open http://localhost:8000  (serves sawvial/ask.html etc.)   Docs: http://localhost:8000/docs
+Open http://localhost:8000 (serves sawvial/*.html).  API docs: http://localhost:8000/docs
 """
-import argparse, re, sys, threading, time
+import argparse
+import collections
+import logging
+import re
+import sys
+import threading
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import List, Literal, Optional
+from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "llm"))
 sys.path.insert(0, str(ROOT))
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-CFG = dict(dataset_dir=str(ROOT / "dataset"), index_dir=str(ROOT / "index"),
-           adapter=str(ROOT / "llm" / "sawvial-lora"), base_model=None, four_bit=False,
-           no_adapter=True, mock=False, translate=True,
-           translator_model="facebook/nllb-200-distilled-600M",
-           max_new_tokens=300, top_k=4)
+from sawvial import grounding, settings
+from sawvial.eligibility import ANSWERABLE_STATUSES
+from sawvial.index.passages import retrieve_passages
+from sawvial.model_config import ModelConfigError
+
+log = logging.getLogger("sawvial.api")
+
+CFG = dict(dataset_dir=str(settings.DATASET_DIR), index_dir=str(settings.INDEX_DIR),
+           adapter=str(settings.ADAPTER_DIR), base_model=None, four_bit=False,
+           no_adapter=False, require_adapter=False, mock=False, translate=True,
+           translator_model=settings.TRANSLATOR_MODEL,
+           max_new_tokens=settings.MAX_NEW_TOKENS, top_k=settings.TOP_K)
 STATE: dict = {}
-LOCK = threading.Lock()          # one generation at a time on the GPU
+# Serialises calls into torch models (LLM, translator, TTS). It is held only for the model
+# call itself - never during retrieval, grounding checks or request parsing.
+INFER_LOCK = threading.Lock()
+
 NO_ANSWER = "The provided sources do not contain enough information to answer this question."
 OUT_OF_SCOPE_ANSWER = (
     "I can answer questions using this agricultural research dataset, including "
     "crops, soil, irrigation, water use, and soil/water conservation. Please ask "
-    "about one of those topics."
-)
+    "about one of those topics.")
 NO_DATA_ANSWER = (
     "I couldn't find relevant, reliable evidence for that question in this "
     "dataset. Try asking about crops, soil, irrigation, water use, or "
-    "soil/water conservation."
-)
-# TF-IDF (offline) cosine scores for good matches are typically 0.05-0.25, so the old
-# 0.11 cut-off rejected most normal farmer questions. get_passages() already requires
-# real term overlap, so this only needs to drop near-zero matches.
-MIN_RETRIEVAL_SCORE = 0.03
-# if the LLM says "not enough information" but retrieval was this strong, show the
-# best passage instead of a dead-end message.
-STRONG_RETRIEVAL_SCORE = 0.08
+    "soil/water conservation.")
+NO_CROP_EVIDENCE = (
+    "The knowledge base does not currently contain enough evidence about {crops} "
+    "to answer this reliably. I will not substitute general advice for a crop-specific "
+    "recommendation. You can add research on this crop (see the README) or ask about "
+    "crops, soil or water topics that the dataset covers.")
+
 AGRICULTURE_TERMS = re.compile(
     r"\b(agricultur\w*|agronom\w*|farm(?:s|ing)?|crop(?:s|ping)?|potato(?:es)?|"
     r"soil|water|irrigat\w*|rainfed|rainfall|drought|watershed|"
@@ -59,91 +73,24 @@ AGRICULTURE_TERMS = re.compile(
     r"evapotranspiration|water productivity|soil moisture|soil health|"
     r"pest\w*|crop disease|plant disease|soil organic carbon|"
     r"rice|paddy|wheat|maize|corn|millet\w*|sorghum|barley|cotton|sugarcane|"
-    r"soybean|soyabean|groundnut|chickpea|pulses?|lentil|mustard|jute|tea|coffee|"
+    r"soybean|soyabean|groundnut|peanut|chickpea|pulses?|lentil|mustard|jute|tea|coffee|"
     r"tomato(?:es)?|onion|cabbage|brinjal|chil(?:l)?i|vegetable\w*|fruit\w*|"
-    r"banana|mango|orchard|paddy|plant(?:s|ing|ation)?|seed(?:s|ling\w*)?|"
+    r"banana|mango|orchard|plant(?:s|ing|ation)?|seed(?:s|ling\w*)?|"
     r"sow(?:n|ing)?|harvest\w*|grow(?:ing)?|cultivat\w*|weed\w*|"
     r"herbicide\w*|pesticide\w*|insecticide\w*|fungicide\w*|insect\w*|"
-    r"disease\w*|fertili[sz]er\w*|biochar|organic|livestock|field|land|"
-    r"drip|sprinkler|mulch|rainwater|moisture|climate|season\w*)\b",
-    re.I,
-)
+    r"disease\w*|biochar|organic|livestock|field|land|"
+    r"drip|sprinkler|rainwater|moisture|climate|season\w*)\b", re.I)
 GREETING = re.compile(
     r"^(?:hi|hello|hey|good morning|good afternoon|good evening|"
-    r"thanks|thank you|ok|okay|yes|no)[.! ]*$",
-    re.I,
-)
+    r"thanks|thank you|ok|okay|yes|no)[.! ]*$", re.I)
 FOLLOW_UP_OPENER = re.compile(
     r"^(?:and\b|what about\b|how about\b|why\b|how so\b|"
     r"explain (?:more|that|this|it)\b|tell me more\b|"
-    r"can you explain\b|could you explain\b)",
-    re.I,
-)
+    r"can you explain\b|could you explain\b)", re.I)
 FOLLOW_UP_WORDS = re.compile(
     r"\b(it|they|them|this|that|these|those|there|such a|such an|"
     r"one line|single line|short(?:er)?|brief(?:ly)?|concise|"
-    r"summarize|summarise|bullet points?)\b",
-    re.I,
-)
-CITE = re.compile(r"\s*\[\s*([A-Z]+_\d+(?:\s*[,;]\s*[A-Z]+_\d+)*)\s*\]")
-CITE_ID = re.compile(r"[A-Z]+_\d+")
-
-
-def find_citations(text: str) -> set:
-    return {i for group in CITE.findall(text) for i in CITE_ID.findall(group)}
-
-
-def strip_citations(text: str, valid_ids: Optional[set] = None) -> str:
-    """Remove [ID] markers from the visible answer (valid or not)."""
-    return re.sub(r"[ \t]+([.,;:!?])", r"\1", CITE.sub("", text)).strip()
-
-
-_FALLBACK_STOP = {
-    "the", "and", "for", "with", "that", "this", "what", "when", "where", "which",
-    "how", "does", "did", "can", "should", "would", "could", "about", "into", "from",
-    "have", "has", "are", "was", "were", "you", "your", "my", "our", "its", "any",
-    "much", "many", "best", "good", "need", "use", "tell", "give", "show", "make",
-}
-
-
-def _terms(text: str) -> set:
-    out = set()
-    for w in re.findall(r"[a-z]{3,}", text.lower()):
-        if w in _FALLBACK_STOP:
-            continue
-        if w.endswith("ies") and len(w) > 4:
-            w = w[:-3] + "y"
-        elif w.endswith("s") and len(w) > 4:
-            w = w[:-1]
-        out.add(w)
-    return out
-
-
-def extractive_answer(question: str, passages: list):
-    """Grounded fallback when the LLM output is unusable.
-
-    Picks the evidence sentences that overlap most with the question and quotes them
-    with the passage id. Returns None when nothing in the passages really matches.
-    """
-    q_terms = _terms(question)
-    best = None  # (score, passage, sentences)
-    for rank, p in enumerate(passages):
-        text = re.sub(r"\s+", " ", (p.get("text") or "")).strip()
-        sents = [x.strip() for x in re.split(r"(?<=[.!?])\s+", text) if len(x.strip()) > 25]
-        for i, sent in enumerate(sents):
-            score = len(q_terms & _terms(sent)) - rank * 0.05
-            if best is None or score > best[0]:
-                best = (score, p, sents[i:i + 2])
-    if not best or best[0] < 1:
-        return None
-    _, passage, sents = best
-    out = " ".join(sents)
-    if len(out) > 480:
-        out = sents[0][:480].rsplit(" ", 1)[0]
-    if out and out[-1] not in ".!?":
-        out += "..."
-    return f"According to the research records: {out} [{passage['id']}]", passage
-
+    r"summarize|summarise|bullet points?)\b", re.I)
 
 NLLB = {"en": "eng_Latn", "bn": "ben_Beng", "hi": "hin_Deva", "as": "asm_Beng",
         "ta": "tam_Taml", "te": "tel_Telu", "mr": "mar_Deva", "ml": "mal_Mlym",
@@ -152,6 +99,7 @@ NLLB = {"en": "eng_Latn", "bn": "ben_Beng", "hi": "hin_Deva", "as": "asm_Beng",
 NAMES = {"english": "en", "bengali": "bn", "bangla": "bn", "hindi": "hi", "assamese": "as",
          "tamil": "ta", "telugu": "te", "marathi": "mr", "malayalam": "ml", "kannada": "kn",
          "gujarati": "gu", "punjabi": "pa", "odia": "or", "oriya": "or", "urdu": "ur", "nepali": "ne"}
+SPEECH_LANGS = Literal["bn", "mr", "en", "hi", "ta", "te", "kn"]
 
 
 def norm_lang(x: Optional[str]) -> str:
@@ -172,53 +120,47 @@ def split_chunks(text: str, limit: int = 350) -> List[str]:
     return chunks
 
 
-def answer_matches_asked_crop(question: str, answer: str, passages: list) -> bool:
-    """Reject generic answers that ignore a crop explicitly asked about."""
-    question_lower = question.lower()
-    answer_lower = answer.lower()
-
-    def crop_is_mentioned(text: str, crop: str) -> bool:
-        if crop.endswith("y"):
-            plural = crop[:-1] + "ies"
-        elif crop.endswith(("o", "ch", "sh", "x", "z", "s")):
-            plural = crop + "es"
-        else:
-            plural = crop + "s"
-        return bool(re.search(
-            rf"\b(?:{re.escape(crop)}|{re.escape(plural)})\b", text,
-        ))
-
-    asked_crops = set()
-    for passage in passages:
-        for crop in passage.get("context", {}).get("crop", []):
-            crop = str(crop).strip().lower()
-            if not crop:
-                continue
-            if crop_is_mentioned(question_lower, crop):
-                asked_crops.add(crop)
-    return all(crop_is_mentioned(answer_lower, crop) for crop in asked_crops)
+# ---------------------------------------------------------------- source metadata
+_DOI = re.compile(r"10\.\d{4,9}/[^\s\"<>]+")
 
 
+def normalize_doi(doi: Optional[str]) -> Optional[str]:
+    m = _DOI.search(doi or "")
+    return m.group(0).rstrip(".,;)") if m else None
+
+
+def safe_http_url(url: Optional[str]) -> Optional[str]:
+    """Only absolute http(s) URLs are ever passed to the frontend as links."""
+    try:
+        u = urlparse((url or "").strip())
+    except ValueError:
+        return None
+    return url.strip() if u.scheme in ("http", "https") and u.netloc else None
+
+
+def source_entry(p: dict, cited: bool) -> dict:
+    """API view of a passage's source. Missing metadata stays None - nothing is invented."""
+    doi = normalize_doi(p.get("doi"))
+    return {"id": p["id"], "document_id": p.get("document_id"), "title": p.get("title"),
+            "authors": p.get("authors") or [], "year": p.get("year"), "journal": p.get("journal"),
+            "doi": doi, "doi_url": f"https://doi.org/{doi}" if doi else None,
+            "url": safe_http_url(p.get("url")), "page": p.get("page"),
+            "section": p.get("section"), "status": p.get("status"),
+            "score": round(float(p["score"]), 4), "cited": cited,
+            "snippet": (p.get("text") or "")[:300]}
+
+
+# ---------------------------------------------------------------- question analysis
 def is_agriculture_question(question: str, bundle: dict) -> bool:
     if AGRICULTURE_TERMS.search(question):
         return True
-    question_lower = question.lower()
-    crops = {
-        str(crop).strip().lower()
-        for unit in bundle["units_by_id"].values()
-        for crop in unit.get("context", {}).get("crop", [])
-        if isinstance(crop, str) and crop.strip()
-    }
-    return any(re.search(rf"\b{re.escape(crop)}\b", question_lower) for crop in crops)
+    ql = question.lower()
+    return any(re.search(rf"\b{re.escape(c)}\b", ql) for c in bundle.get("crop_names", ()))
 
 
 def is_follow_up(question: str) -> bool:
-    """A follow-up is a short message that leans on the previous turn.
-
-    Pronoun-like words ("this week", "that field") inside a normal, self-contained
-    question must NOT make it a follow-up, otherwise the previous topic gets mixed
-    into the retrieval query and the answer comes back unrelated or empty.
-    """
+    """A short message leaning on the previous turn. Pronouns inside a normal, self-contained
+    question ("this week", "that field") must NOT make it a follow-up."""
     q = question.strip()
     if FOLLOW_UP_OPENER.search(q):
         return True
@@ -230,44 +172,21 @@ def is_formatting_request(question: str) -> bool:
         r"\b(?:make|keep|write|put|format|shorten|summari[sz]e|answer)\b.*"
         r"\b(?:short(?:er)?|brief(?:ly)?|concise|one[- ]line|single[- ]line|"
         r"bullet points?|simpler|plain language)\b|"
-        r"^\s*(?:in|as)\s+(?:one|a single)\s+line\s*[.!?]*$",
-        question.strip(),
-        re.I,
-    ))
+        r"^\s*(?:in|as)\s+(?:one|a single)\s+line\s*[.!?]*$", question.strip(), re.I))
 
 
-def find_anchor_question(history: list[dict], bundle: dict) -> str:
+def find_anchor_question(history: list, bundle: dict) -> str:
     for turn in reversed(history):
         if turn.get("role") != "user":
             continue
         content = (turn.get("content") or "").strip()
-        if content and not is_formatting_request(content) and not is_follow_up(content):
-            if is_agriculture_question(content, bundle):
-                return content
+        if (content and not is_formatting_request(content) and not is_follow_up(content)
+                and is_agriculture_question(content, bundle)):
+            return content
     return ""
 
 
-def crop_irrigation_summary(question: str, passages: list[dict]):
-    if not re.search(r"\b(water|irrigat\w*)\b", question, re.I):
-        return None
-    for passage in passages:
-        if not passage.get("crop_focused"):
-            continue
-        match = re.search(
-            r"\b(\d+)\s+irrigations?\s+applied\b", passage.get("text", ""), re.I,
-        )
-        crops = passage.get("context", {}).get("crop", [])
-        if not match or not crops:
-            continue
-        crop = crops[0]
-        answer = (
-            f"The dataset records {match.group(1)} irrigations for {crop}; "
-            f"it does not specify the timing or water amount. [{passage['id']}]"
-        )
-        return answer, passage
-    return None
-
-
+# ---------------------------------------------------------------- translation
 class Translator:
     """NLLB-200 (600M). NOTE: licence is CC-BY-NC 4.0 (non-commercial)."""
     def __init__(self, name: str):
@@ -275,71 +194,150 @@ class Translator:
         from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
         self.torch = torch
         self.dev = "cuda" if torch.cuda.is_available() else "cpu"
-        self.tok = AutoTokenizer.from_pretrained(name, local_files_only=True)
+        local = settings.OFFLINE
+        self.tok = AutoTokenizer.from_pretrained(name, local_files_only=local)
         self.model = AutoModelForSeq2SeqLM.from_pretrained(
             name, torch_dtype=torch.float16 if self.dev == "cuda" else torch.float32,
-            local_files_only=True).to(self.dev).eval()
+            local_files_only=local).to(self.dev).eval()
 
     def translate(self, text: str, src: str, tgt: str) -> str:
         chunks = split_chunks(text)
         if not chunks:
             return text
         self.tok.src_lang = src
-        enc = self.tok(chunks, return_tensors="pt", padding=True, truncation=True, max_length=256).to(self.dev)
+        enc = self.tok(chunks, return_tensors="pt", padding=True, truncation=True,
+                       max_length=256).to(self.dev)
         with self.torch.no_grad():
             out = self.model.generate(**enc, forced_bos_token_id=self.tok.convert_tokens_to_ids(tgt),
                                       max_new_tokens=300, num_beams=3)
         return " ".join(self.tok.batch_decode(out, skip_special_tokens=True))
 
 
+def safe_translate(tr, text: str, src: str, tgt: str, timings: Optional[dict] = None,
+                   key: str = "translate") -> tuple:
+    """-> (text, ok). Never fails the request; on error returns the untranslated text, ok=False."""
+    if not tr or not text:
+        return text, False
+    t0 = time.time()
+    try:
+        with INFER_LOCK:
+            out = tr.translate(text, src, tgt)
+        return out, True
+    except Exception as exc:
+        log.warning("Translation %s->%s failed: %s", src, tgt, exc)
+        return text, False
+    finally:
+        if timings is not None:
+            timings[key] = timings.get(key, 0) + int((time.time() - t0) * 1000)
+
+
+# ---------------------------------------------------------------- start-up
+def load_all() -> None:
+    """Load retriever, LLM and translator once. Raises ModelConfigError with a clear fix."""
+    if STATE.get("loaded") or CFG["mock"]:
+        return
+    try:
+        import rag_chat as rag
+    except ImportError as exc:
+        raise ModelConfigError(f"Model libraries are missing ({exc}). Install them with: "
+                               "pip install -r requirements-llm.txt   (or use --mock for UI testing)") from exc
+    STATE["rag"] = rag
+    log.info("Loading retriever ...")
+    STATE["bundle"], STATE["embedder"] = rag.load_retriever(CFG["index_dir"], CFG["dataset_dir"])
+    from sawvial.index.retriever import warm_up
+    warm_up(STATE["bundle"])
+    log.info("Loading LLM ...")
+    STATE["tok"], STATE["model"], STATE["llm_status"] = rag.load_llm(SimpleNamespace(
+        adapter=CFG["adapter"], base_model=CFG["base_model"], no_adapter=CFG["no_adapter"],
+        require_adapter=CFG["require_adapter"], four_bit=CFG["four_bit"]))
+    STATE["translator"], STATE["translator_error"] = None, None
+    if CFG["translate"]:
+        log.info("Loading translator ...")
+        try:
+            STATE["translator"] = Translator(CFG["translator_model"])
+        except Exception as exc:                       # missing model must not stop English use
+            STATE["translator_error"] = (
+                f"{exc.__class__.__name__}: translation model {CFG['translator_model']} is unavailable "
+                f"(run `python tools/download_models.py`). Non-English questions will be answered "
+                f"in English only.")
+            log.warning(STATE["translator_error"])
+    STATE["loaded"] = True
+    log.info("Ready.")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    if not CFG["mock"]:
-        import rag_chat as rag
-        STATE["rag"] = rag
-        print("Loading retriever ...")
-        STATE["bundle"], STATE["embedder"] = rag.load_retriever(CFG["index_dir"], CFG["dataset_dir"])
-        print("Loading LLM ...")
-        STATE["tok"], STATE["model"] = rag.load_llm(SimpleNamespace(
-            adapter=CFG["adapter"], base_model=CFG["base_model"],
-            no_adapter=CFG["no_adapter"], four_bit=CFG["four_bit"]))
-        if CFG["translate"]:
-            print("Loading translator ...")
-            STATE["translator"] = Translator(CFG["translator_model"])
-        print("Ready.")
+    load_all()
     yield
 
 
 app = FastAPI(title="SAWVIAL API", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=settings.CORS_ORIGINS,
+                   allow_methods=["GET", "POST"], allow_headers=["Content-Type"])
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    resp = await call_next(request)
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("Referrer-Policy", "no-referrer")
+    return resp
+
+
+class RateLimiter:
+    """Tiny per-client sliding-window limiter. Behind a reverse proxy every client shares the
+    proxy's IP - use the proxy's own limiter there."""
+    def __init__(self, per_minute: int):
+        self.per_minute, self.hits, self.lock = per_minute, collections.defaultdict(collections.deque), threading.Lock()
+
+    def check(self, key: str) -> bool:
+        if self.per_minute <= 0:
+            return True
+        now = time.time()
+        with self.lock:
+            q = self.hits[key]
+            while q and now - q[0] > 60:
+                q.popleft()
+            if len(q) >= self.per_minute:
+                return False
+            q.append(now)
+            return True
+
+
+LIMITER = RateLimiter(settings.RATE_LIMIT_PER_MIN)
+
+
+def rate_limit(request: Request):
+    if not LIMITER.check(request.client.host if request.client else "unknown"):
+        raise HTTPException(429, "Too many requests - please wait a moment and try again.")
 
 
 class ChatTurn(BaseModel):
     role: Literal["user", "assistant"]
-    content: str
+    content: str = Field(max_length=4000)
 
 
 class AskIn(BaseModel):
-    question: Optional[str] = None
-    query: Optional[str] = None      # accepted aliases, in case the frontend uses another name
-    message: Optional[str] = None
-    language: Optional[str] = "en"   # "bn", "bn-IN", "Bengali", "hi", ...
-    top_k: Optional[int] = None
-    history: Optional[List[ChatTurn]] = None
-    request_id: Optional[str] = None
+    question: Optional[str] = Field(None, max_length=settings.MAX_QUESTION_CHARS + 200)
+    query: Optional[str] = Field(None, max_length=settings.MAX_QUESTION_CHARS + 200)   # aliases
+    message: Optional[str] = Field(None, max_length=settings.MAX_QUESTION_CHARS + 200)
+    language: Optional[str] = Field("en", max_length=20)
+    top_k: Optional[int] = Field(None, ge=1, le=8)
+    history: Optional[List[ChatTurn]] = Field(None, max_length=48)
+    request_id: Optional[str] = Field(None, max_length=120)
 
 
 class CancelIn(BaseModel):
-    request_id: str
+    request_id: str = Field(max_length=120)
 
 
 class SpeechIn(BaseModel):
-    text: str
-    language: Literal["bn", "mr", "en"]
-    request_id: Optional[str] = None
+    text: str = Field(max_length=2000)
+    language: SPEECH_LANGS
+    request_id: Optional[str] = Field(None, max_length=120)
 
 
-CANCEL_EVENTS: dict[str, threading.Event] = {}
+CANCEL_EVENTS: dict = {}
 CANCEL_EVENTS_LOCK = threading.Lock()
 
 
@@ -352,293 +350,220 @@ def cancel(body: CancelIn):
     return {"status": "cancelling", "request_id": body.request_id}
 
 
-@app.post("/api/speech/stream")
+@app.post("/api/speech/stream", dependencies=[Depends(rate_limit)])
 def speech(body: SpeechIn):
     if not body.text.strip():
         raise HTTPException(400, "text is required")
-    if len(body.text) > 2000:
-        raise HTTPException(400, "text too long (max 2000 characters)")
+    import speech as speech_mod                          # llm/speech.py (llm/ is on sys.path)
+    if not speech_mod.is_cached(body.language) and settings.OFFLINE:
+        raise HTTPException(503, f"No local voice model for '{body.language}'. "
+                                 "Run `python tools/download_models.py --speech`; the browser voice "
+                                 "will be used instead.")
     request_id = body.request_id or f"speech-{time.time_ns()}"
-    if len(request_id) > 120:
-        raise HTTPException(400, "request_id too long")
     cancel_event = threading.Event()
     with CANCEL_EVENTS_LOCK:
         if request_id in CANCEL_EVENTS:
             raise HTTPException(409, "request_id is already in use")
         CANCEL_EVENTS[request_id] = cancel_event
-    try:
+
+    def audio_stream():
+        chunks = None
         try:
-            from llm.speech import SAMPLE_RATE, stream_audio
-        except ModuleNotFoundError as exc:
-            if exc.name != "transformers":
-                raise
-            raise HTTPException(
-                503, "Install the API dependencies from requirements.txt",
-            ) from exc
-        def audio_stream():
-            try:
-                chunks = iter(stream_audio(body.text, body.language, cancel_event))
-                while not cancel_event.is_set():
-                    try:
-                        with LOCK:
-                            chunk = next(chunks)
-                    except StopIteration:
-                        break
-                    yield chunk
-            except Exception as exc:
-                print(f"Speech stream {request_id} failed: {exc}", file=sys.stderr)
-                raise
-            finally:
-                if "chunks" in locals():
-                    chunks.close()
-                with CANCEL_EVENTS_LOCK:
-                    CANCEL_EVENTS.pop(request_id, None)
+            chunks = iter(speech_mod.stream_audio(body.text, body.language, cancel_event))
+            while not cancel_event.is_set():
+                try:
+                    with INFER_LOCK:
+                        chunk = next(chunks)
+                except StopIteration:
+                    break
+                yield chunk
+        except Exception as exc:
+            log.error("Speech stream %s failed: %s", request_id, exc)
+            raise
+        finally:
+            if chunks is not None:
+                chunks.close()
+            with CANCEL_EVENTS_LOCK:
+                CANCEL_EVENTS.pop(request_id, None)
 
-        return StreamingResponse(
-            audio_stream(),
-            media_type="application/octet-stream",
-            headers={
-                "Cache-Control": "no-store",
-                "X-Audio-Sample-Rate": str(SAMPLE_RATE),
-            },
-        )
-    except Exception:
-        with CANCEL_EVENTS_LOCK:
-            CANCEL_EVENTS.pop(request_id, None)
-        raise
+    return StreamingResponse(audio_stream(), media_type="application/octet-stream",
+                             headers={"Cache-Control": "no-store",
+                                      "X-Audio-Sample-Rate": str(speech_mod.SAMPLE_RATE)})
 
 
-def dataset_crop_summary(question: str, bundle: dict) -> Optional[tuple[str, list[dict]]]:
-    """Answer corpus-wide WUE crop-list questions from all eligible records."""
-    if not re.search(r"\b(which|what)\s+crops?\b", question, re.I):
-        return None
-    if not re.search(r"\b(water[\s-]+use efficiency|WUE|IWUE)\b", question, re.I):
-        return None
-
-    crop_names = {
-        str(crop).strip().lower()
-        for unit in bundle["units_by_id"].values()
-        for crop in unit.get("context", {}).get("crop", [])
-        if isinstance(crop, str) and crop.strip()
-    }
-    supported: dict[str, dict] = {}
-    for unit in bundle["units_by_id"].values():
-        if unit.get("quality", {}).get("validation_status") not in {"validated", "needs_review"}:
-            continue
-        evidence = unit.get("knowledge", {}).get("evidence") or ""
-        title = unit.get("source", {}).get("title") or ""
-        searchable = f"{evidence} {title}"
-        if not re.search(r"\b(water[\s-]+use efficiency|WUE|IWUE)\b", searchable, re.I):
-            continue
-        for crop in crop_names.intersection(
-            str(value).strip().lower()
-            for value in unit.get("context", {}).get("crop", [])
-        ):
-            plural = crop[:-1] + "ies" if crop.endswith("y") else crop + "s"
-            if re.search(rf"\b(?:{re.escape(crop)}|{re.escape(plural)})\b", searchable, re.I):
-                supported.setdefault(crop, unit)
-
-    if not supported:
-        return None
-
-    names = sorted(supported)
-    sources = []
-    for crop in names:
-        unit = supported[crop]
-        sources.append({
-            "id": unit["id"],
-            "title": unit.get("source", {}).get("title"),
-            "page": unit.get("provenance", {}).get("page"),
-            "score": 1.0,
-            "cited": True,
-            "snippet": unit.get("knowledge", {}).get("evidence", "")[:300],
-        })
-    cited_names = ", ".join(f"{crop} [{supported[crop]['id']}]" for crop in names)
-    answer = (
-        "Validated or reviewable dataset records explicitly mention water-use "
-        f"efficiency alongside these crops: {cited_names}. This is a corpus-wide "
-        "list of textual matches; it does not mean every crop was compared in "
-        "the same study or under the same conditions."
-    )
-    return answer, sources
-
-
-def safe_translate(tr, text: str, src: str, tgt: str) -> str:
-    """Translate, but never fail the whole request if the translator errors."""
-    if not tr or not text:
-        return text
-    try:
-        return tr.translate(text, src, tgt)
-    except Exception as exc:
-        print(f"Translation {src}->{tgt} failed: {exc}", file=sys.stderr)
-        return text
-
-
-def run_ask(question: str, lang: str, top_k: int, history: Optional[List[ChatTurn]] = None,
-             cancel_event: Optional[threading.Event] = None) -> dict:
-    t0 = time.time()
-    if CFG["mock"]:
-        ans = "এটি একটি পরীক্ষামূলক উত্তর।" if lang == "bn" else "This is a mock answer for frontend testing."
-        return {"answer": ans, "language": lang, "grounded": True, "mock": True,
-                "sources": [{"id": "SWM_000000", "title": "Mock source", "page": 1, "score": 1.0,
-                             "cited": True, "snippet": "Mock evidence text."}],
-                "latency_ms": int((time.time() - t0) * 1000)}
-
-    rag, tr = STATE["rag"], STATE.get("translator")
-    q_en, translated = question, False
-    prior_turns = []
-    total_history_chars = 0
+# ---------------------------------------------------------------- the answer pipeline
+def _history_turns(history) -> list:
+    turns, total = [], 0
     for turn in reversed(history or []):
         content = turn.content.strip()
-        if not content or len(prior_turns) >= 24 or total_history_chars >= 8000:
+        if not content or len(turns) >= 24 or total >= 8000:
             continue
-        content = content[:min(700, 8000 - total_history_chars)]
-        prior_turns.append({"role": turn.role, "content": content})
-        total_history_chars += len(content)
-    prior_turns.reverse()
-    with LOCK:
-        if lang != "en" and tr:
-            q_en = safe_translate(tr, question, NLLB[lang], "eng_Latn"); translated = True
-            prior_turns = [
-                {"role": turn["role"],
-                 "content": safe_translate(tr, turn["content"], NLLB[lang], "eng_Latn")}
-                for turn in prior_turns
-            ]
+        content = content[:min(700, 8000 - total)]
+        turns.append({"role": turn.role, "content": content})
+        total += len(content)
+    turns.reverse()
+    return turns
 
-        def direct_response(text: str) -> dict:
-            out_text = safe_translate(tr, text, "eng_Latn", NLLB[lang]) if lang != "en" else text
-            return {
-                "answer": out_text,
-                "language": lang,
-                "grounded": False,
-                "sources": [],
-                "latency_ms": int((time.time() - t0) * 1000),
-            }
 
-        if GREETING.fullmatch(q_en.strip()):
-            return direct_response(
-                "Hello! I can help with questions about crops, soil, irrigation, "
-                "water use, and soil/water conservation in this research dataset."
-            )
+def run_ask(question: str, lang: str, top_k: int, history=None, cancel_event=None) -> dict:
+    t0 = time.time()
+    timings: dict = {}
 
-        previous_question = find_anchor_question(prior_turns, STATE["bundle"])
-        follow_up = bool(previous_question) and (
-            is_follow_up(q_en) or is_formatting_request(q_en)
-        )
-        if not is_agriculture_question(q_en, STATE["bundle"]) and not follow_up:
-            return direct_response(OUT_OF_SCOPE_ANSWER)
+    def finish(res: dict) -> dict:
+        timings["total"] = int((time.time() - t0) * 1000)
+        res["latency_ms"] = timings["total"]
+        res["timings_ms"] = dict(timings)
+        log.info("ask lang=%s grounding=%s timings=%s", lang, res.get("grounding", {}).get("status"), timings)
+        return res
 
-        summary = dataset_crop_summary(q_en, STATE["bundle"])
-        if summary:
-            clean, sources = summary
-            clean = strip_citations(clean)
-            out_text = safe_translate(tr, clean, "eng_Latn", NLLB[lang]) if lang != "en" else clean
-            return {
-                "answer": out_text,
-                "language": lang,
-                "grounded": True,
-                "sources": sources,
-                "latency_ms": int((time.time() - t0) * 1000),
-            }
-        retrieval_query = f"{previous_question} {q_en}" if follow_up else q_en
-        passages = rag.get_passages(
-            STATE["bundle"], STATE["embedder"], retrieval_query, top_k,
-        )
-        summary_question = (
-            retrieval_query
-            if follow_up and is_formatting_request(q_en)
-            else q_en
-        )
-        crop_irrigation = crop_irrigation_summary(summary_question, passages)
-        if crop_irrigation:
-            clean, passage = crop_irrigation
-            clean = strip_citations(clean)
-            out_text = safe_translate(tr, clean, "eng_Latn", NLLB[lang]) if lang != "en" else clean
-            return {
-                "answer": out_text,
-                "language": lang,
-                "grounded": True,
-                "sources": [{
-                    "id": passage["id"],
-                    "title": passage.get("title"),
-                    "page": passage.get("page"),
-                    "score": round(float(passage["score"]), 4),
-                    "cited": True,
-                    "snippet": passage["text"][:300],
-                }],
-                "latency_ms": int((time.time() - t0) * 1000),
-            }
-        if not passages or max(float(p["score"]) for p in passages) < MIN_RETRIEVAL_SCORE:
-            return direct_response(NO_DATA_ANSWER)
-        context_history = prior_turns if follow_up else []
-        raw = rag.answer(STATE["tok"], STATE["model"], q_en, passages,
-                         CFG["max_new_tokens"], history=context_history,
-                         cancel_event=cancel_event) or ""
-        if cancel_event is not None and cancel_event.is_set():
-            return direct_response("Stopped.")
-        available_citations = {p["id"] for p in passages}
-        cited = find_citations(raw) & available_citations      # ignore invented ids
-        clean = strip_citations(raw)
-        top_score = max(float(p["score"]) for p in passages)
-        fallback = extractive_answer(q_en, passages)
+    if CFG["mock"]:
+        ans = "এটি একটি পরীক্ষামূলক উত্তর।" if lang == "bn" else "This is a mock answer for frontend testing."
+        return finish({"answer": ans, "language": lang, "answer_language": lang, "grounded": True,
+                       "mock": True, "grounding": {"status": "mock"},
+                       "sources": [{"id": "SWM_000000", "title": "Mock source", "authors": ["A. Author"],
+                                    "year": 2024, "journal": "Mock Journal", "doi": "10.1000/mock",
+                                    "doi_url": "https://doi.org/10.1000/mock", "url": None, "page": 1,
+                                    "score": 1.0, "cited": True, "snippet": "Mock evidence text."}]})
 
-        unusable = (
-            not clean
-            or (find_citations(raw) and not cited)              # only made-up citations
-            or not answer_matches_asked_crop(q_en, clean, passages)
-        )
-        says_no_info = clean.lower().startswith("the provided sources do not")
-        if fallback and (unusable or (says_no_info and top_score >= STRONG_RETRIEVAL_SCORE)):
-            clean, best = fallback
-            clean = strip_citations(clean)
-            cited = {best["id"]}
-        elif unusable:
-            return direct_response(NO_DATA_ANSWER)
-        grounded = bool(passages) and not clean.lower().startswith("the provided sources do not")
-        out_text = clean
-        if lang != "en" and tr:
-            out_text = safe_translate(tr, clean, "eng_Latn", NLLB[lang])
-    res = {"answer": out_text, "language": lang, "grounded": grounded,
-           "sources": [{"id": p["id"], "title": p["title"], "page": p["page"],
-                        "score": round(float(p["score"]), 4), "cited": p["id"] in cited,
-                        "snippet": p["text"][:300]} for p in passages],
-           "latency_ms": int((time.time() - t0) * 1000)}
-    if translated:
+    rag, tr, bundle = STATE["rag"], STATE.get("translator"), STATE["bundle"]
+    prior = _history_turns(history)
+    q_en, translated_in, translation_ok = question, False, True
+    if lang != "en":
+        if tr:
+            q_en, translation_ok = safe_translate(tr, question, NLLB[lang], "eng_Latn", timings, "translate_in")
+            translated_in = translation_ok
+            if translation_ok:
+                prior = [{"role": t["role"],
+                          "content": safe_translate(tr, t["content"], NLLB[lang], "eng_Latn", timings, "translate_in")[0]}
+                         for t in prior]
+        else:
+            translation_ok = False
+
+    def direct(text_en: str, status: str, **extra) -> dict:
+        out, ok = (text_en, True) if lang == "en" else safe_translate(tr, text_en, "eng_Latn", NLLB[lang],
+                                                                      timings, "translate_out")
+        res = {"answer": out, "language": lang, "answer_language": lang if (lang == "en" or ok) else "en",
+               "grounded": False, "sources": [], "grounding": {"status": status, **extra}}
+        if lang != "en" and not ok:
+            res["note"] = "translation_unavailable"
+        return finish(res)
+
+    if GREETING.fullmatch(q_en.strip()):
+        return direct("Hello! I can help with questions about crops, soil, irrigation, water use, and "
+                      "soil/water conservation in this research dataset.", "not_applicable")
+
+    previous_question = find_anchor_question(prior, bundle)
+    follow_up = bool(previous_question) and (is_follow_up(q_en) or is_formatting_request(q_en))
+    if not is_agriculture_question(q_en, bundle) and not follow_up:
+        return direct(OUT_OF_SCOPE_ANSWER, "not_applicable", reason="out_of_scope")
+
+    retrieval_query = f"{previous_question} {q_en}" if follow_up else q_en
+    t1 = time.time()
+    found = retrieve_passages(bundle, retrieval_query, top_k, STATE.get("embedder"))
+    timings["retrieval"] = int((time.time() - t1) * 1000)
+    passages = found["passages"]
+
+    if found["crop_missing"]:
+        return direct(NO_CROP_EVIDENCE.format(crops=", ".join(found["crops"])), "insufficient_evidence",
+                      reason="no_crop_evidence", crops=found["crops"])
+    if not passages or max(float(p["score"]) for p in passages) < settings.MIN_RETRIEVAL_SCORE:
+        return direct(NO_DATA_ANSWER, "insufficient_evidence", reason="no_relevant_evidence")
+
+    t2 = time.time()
+    with INFER_LOCK:
+        raw = rag.answer(STATE["tok"], STATE["model"], q_en, passages, CFG["max_new_tokens"],
+                         history=prior if follow_up else [], cancel_event=cancel_event) or ""
+    timings["generation"] = int((time.time() - t2) * 1000)
+    if cancel_event is not None and cancel_event.is_set():
+        return direct("Stopped.", "cancelled")
+
+    t3 = time.time()
+    report = grounding.assess(raw, passages)
+    text, cited_ids = grounding.compose_supported_answer(report)
+    removed = report["n_claims"] - report["n_supported"]
+    if text:
+        status = "supported" if not removed and not report["invalid_citations"] else "partially_supported"
+    else:
+        fallback = grounding.extractive_answer(q_en, passages)
+        if not fallback:
+            timings["grounding"] = int((time.time() - t3) * 1000)
+            return direct(NO_DATA_ANSWER, "insufficient_evidence", reason="model_output_not_supported",
+                          invalid_citations=report["invalid_citations"])
+        text, best = fallback
+        cited_ids, status = [best["id"]], "extractive_fallback"
+    timings["grounding"] = int((time.time() - t3) * 1000)
+
+    level = grounding.evidence_level(cited_ids, passages)
+    notes = [n for n, cond in (("single_source", level == "single_source"),
+                               ("partially_supported", status == "partially_supported"),
+                               ("extractive_fallback", status == "extractive_fallback")) if cond]
+    out_text, ok = (text, True) if lang == "en" else safe_translate(tr, text, "eng_Latn", NLLB[lang],
+                                                                    timings, "translate_out")
+    res = {"answer": out_text, "language": lang,
+           "answer_language": lang if (lang == "en" or ok) else "en",
+           "grounded": True,
+           "grounding": {"status": status, "claims": report["n_claims"], "supported_claims": report["n_supported"],
+                         "removed_unsupported": removed, "invalid_citations": report["invalid_citations"],
+                         "evidence_level": level, "notes": notes},
+           "sources": [source_entry(p, p["id"] in set(cited_ids)) for p in passages]}
+    if translated_in:
         res["question_en"] = q_en
-        res["answer_en"] = clean
-    if lang != "en" and not tr:
-        res["note"] = "translation unavailable - answer is in English"
-    return res
+    if lang != "en":
+        res["answer_en"] = text
+        if not ok:
+            res["note"] = "translation_unavailable"
+    return finish(res)
 
 
+# ---------------------------------------------------------------- endpoints
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "mock": CFG["mock"], "translator": bool(STATE.get("translator")),
-            "adapter": None if CFG["no_adapter"] else CFG["adapter"]}
+    llm = STATE.get("llm_status") or {}
+    bundle = STATE.get("bundle") or {}
+    meta = bundle.get("index_meta") or {}
+    try:
+        import speech as speech_mod
+        speech_local = speech_mod.available_languages()
+    except Exception:
+        speech_local = []
+    return {"status": "ok", "mock": CFG["mock"],
+            "translator": bool(STATE.get("translator")),
+            "translator_error": STATE.get("translator_error"),
+            "llm": {"mode": llm.get("mode"), "adapter_status": llm.get("adapter_status"),
+                    "message": llm.get("message"), "base_model": llm.get("base_model")},
+            "index": {"n_units": meta.get("n_units"), "built_at": meta.get("built_at"),
+                      "stale": bundle.get("stale"), "dense": bool(bundle.get("dense_index"))},
+            "answerable_statuses": sorted(ANSWERABLE_STATUSES),
+            "speech_local": speech_local}
 
 
-@app.post("/api/ask")
+@app.post("/api/ask", dependencies=[Depends(rate_limit)])
 def ask(body: AskIn):
     q = (body.question or body.query or body.message or "").strip()
     if not q:
         raise HTTPException(400, "question is required")
-    if len(q) > 1000:
-        raise HTTPException(400, "question too long (max 1000 characters)")
-    if body.request_id and len(body.request_id) > 120:
-        raise HTTPException(400, "request_id too long")
+    if len(q) > settings.MAX_QUESTION_CHARS:
+        raise HTTPException(400, f"question too long (max {settings.MAX_QUESTION_CHARS} characters)")
+    if not CFG["mock"] and not STATE.get("loaded"):
+        raise HTTPException(503, "The assistant is still starting up; please retry in a moment.")
     request_id = body.request_id or f"ask-{time.time_ns()}"
     cancel_event = threading.Event()
     with CANCEL_EVENTS_LOCK:
         CANCEL_EVENTS[request_id] = cancel_event
     try:
-        return run_ask(q, norm_lang(body.language), max(1, min(body.top_k or CFG["top_k"], 8)),
+        return run_ask(q, norm_lang(body.language), body.top_k or CFG["top_k"],
                        history=body.history, cancel_event=cancel_event)
+    except HTTPException:
+        raise
+    except Exception:
+        log.exception("ask failed")
+        raise HTTPException(500, "Internal error while answering. Details are in the server log.")
     finally:
         with CANCEL_EVENTS_LOCK:
             CANCEL_EVENTS.pop(request_id, None)
 
 
-# ---- serve the frontend (only the html pages + css/js/assets, NOT the python package) ----
+# ---- serve the frontend (only html pages + css/js/assets, NOT the python package) ----
 WEB = ROOT / "sawvial"
 for d in ("css", "js", "assets"):
     if (WEB / d).is_dir():
@@ -660,21 +585,31 @@ def page(page: str):
 
 def main():
     import uvicorn
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     ap = argparse.ArgumentParser()
-    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--host", default="127.0.0.1", help="use 0.0.0.0 only behind a firewall/proxy")
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--mock", action="store_true")
     ap.add_argument("--no_translate", action="store_true")
-    ap.add_argument("--no_adapter", action="store_true")
-    ap.add_argument("--use_adapter", dest="no_adapter", action="store_false",
-                    help="Use the experimental fine-tuned adapter (disabled by default).")
-    ap.set_defaults(no_adapter=True)
+    ap.add_argument("--base_only", "--no_adapter", dest="no_adapter", action="store_true",
+                    help="explicitly run the base model WITHOUT the LoRA adapter")
+    ap.add_argument("--use_adapter", action="store_true", help="(deprecated: the adapter is on by default)")
+    ap.add_argument("--require_adapter", action="store_true", help="fail if the adapter is missing")
     ap.add_argument("--adapter", default=CFG["adapter"])
+    ap.add_argument("--base_model", default=None)
+    ap.add_argument("--4bit", dest="four_bit", action="store_true")
     ap.add_argument("--dataset_dir", default=CFG["dataset_dir"])
     ap.add_argument("--index_dir", default=CFG["index_dir"])
     a = ap.parse_args()
     CFG.update(mock=a.mock, translate=not a.no_translate, no_adapter=a.no_adapter,
-               adapter=a.adapter, dataset_dir=a.dataset_dir, index_dir=a.index_dir)
+               require_adapter=a.require_adapter, adapter=a.adapter, base_model=a.base_model,
+               four_bit=a.four_bit, dataset_dir=a.dataset_dir, index_dir=a.index_dir)
+    try:
+        load_all()                                   # fail here with a clean message, not a traceback
+    except (ModelConfigError, FileNotFoundError, RuntimeError) as exc:
+        sys.exit(f"\nSAWVIAL could not start:\n  {exc}\n")
+    if a.host not in ("127.0.0.1", "localhost"):
+        log.warning("Listening on %s: set SAWVIAL_CORS_ORIGINS and put this behind HTTPS and a firewall.", a.host)
     uvicorn.run(app, host=a.host, port=a.port)
 
 

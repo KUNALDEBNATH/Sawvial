@@ -1,15 +1,20 @@
 {
-  "embedding": {
-    "model_name": "tfidf",
-    "offline": true,
-    "dimension": 768,
-    "normalize": true
+  "format_version": 2,
+  "built_at": "2026-10-26T05:07:30.437975+00:00",
+  "n_units": 5568,
+  "answerable_statuses": [
+    "validated",
+    "verified"
+  ],
+  "eligibility_rules_version": 2,
+  "indexed_status_counts": {
+    "validated": 5568
   },
-  "faiss_index_type": "IndexFlatIP (exact cosine, vectors L2-normalized)",
-  "n_vectors": 15752,
-  "dimension": 768,
-  "dataset_stats_summary": {
-    "total_knowledge_units": 15764,
-    "validated": 6432
-  }
+  "dataset_file": "dataset\\knowledge_units.jsonl",
+  "dataset_sha256": "48c4b59f8c936ae94aff2ced2421dbdc14ebec70cbf3d5fb1f5a26b5338218f1",
+  "lexical": {
+    "type": "tfidf(1,2)-sparse-cosine",
+    "n_features": 259151
+  },
+  "dense": null
 }

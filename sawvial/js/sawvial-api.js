@@ -11,7 +11,8 @@
       ? "http://localhost:8000"
       : "");
 
-  // Resolves to {answer, grounded, language, sources:[{id,title,page,score,cited,snippet}], latency_ms}
+  // Resolves to {answer, grounded, language, answer_language, grounding, sources:[{id,title,authors,year,journal,
+  // doi,doi_url,url,page,score,cited,snippet}], latency_ms}. Rejects with err.status / err.detail.
   const requests = Object.create(null);
 
   window.sawvialAsk = async function (question, language, history, requestId) {
@@ -31,7 +32,14 @@
         }),
         signal: ctrl.signal,
       });
-      if (!r.ok) throw new Error("SAWVIAL API error " + r.status);
+      if (!r.ok) {
+        let detail = "";
+        try { detail = (await r.json()).detail || ""; } catch (e) { /* non-JSON error body */ }
+        const err = new Error("SAWVIAL API error " + r.status + (detail ? ": " + detail : ""));
+        err.status = r.status;
+        err.detail = detail;
+        throw err;
+      }
       return await r.json();
     } finally {
       clearTimeout(timer);
@@ -95,4 +103,8 @@
     const r = await fetch(BASE + "/api/health");
     return r.json();
   };
+
+  // Server capabilities (e.g. which languages have a LOCAL voice). Missing/failed = browser voices only.
+  window.SAWVIAL_CAPS = { speech_local: [] };
+  window.sawvialHealth().then(function (h) { window.SAWVIAL_CAPS = h; }).catch(function () {});
 })();

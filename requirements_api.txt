@@ -1,5 +1,2 @@
-numpy<2
-fastapi>=0.110
-uvicorn>=0.29
-sentencepiece
-protobuf
+# Kept so old instructions keep working. Use requirements.txt / requirements-llm.txt.
+-r requirements-llm.txt

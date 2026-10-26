@@ -1,0 +1,16 @@
+{"id":"crop-cotton-drip","type":"crop","crop":"cotton","question":"How does drip irrigation affect water use efficiency in cotton?","must_mention_any":["drip","water use efficiency","water-use efficiency"]}
+{"id":"crop-groundnut-irrigation","type":"crop","crop":"groundnut","question":"What does the research say about irrigation of groundnut?","must_mention_any":["irrigation","water"]}
+{"id":"crop-maize-nitrogen","type":"crop","crop":"maize","question":"How does nitrogen fertilizer affect maize yield?","must_mention_any":["nitrogen","fertili"]}
+{"id":"crop-wheat-water","type":"crop","crop":"wheat","question":"How much irrigation water does wheat need?","must_mention_any":["irrigation","water"]}
+{"id":"crop-rice-paddy-synonym","type":"crop","crop":"rice","question":"How should paddy fields be irrigated to save water?","must_mention_any":["irrigation","water"]}
+{"id":"crop-potato-water","type":"crop","crop":"potato","question":"Water management for potato","must_mention_any":["irrigation","water"]}
+{"id":"crop-soybean-soil","type":"crop","crop":"soybean","question":"Which soil practices help soybean?","must_mention_any":["soil"]}
+{"id":"crop-chickpea-moisture","type":"crop","crop":"chickpea","question":"Soil moisture and chickpea yield","must_mention_any":["moisture","water","irrigation"]}
+{"id":"general-soil-fertility","type":"general","question":"How can I improve soil fertility?","must_mention_any":["fertility","organic","manure","compost","nutrient"]}
+{"id":"general-wue","type":"general","question":"How can water use efficiency be improved?","must_mention_any":["water use efficiency","water-use efficiency","WUE","irrigation"]}
+{"id":"general-erosion","type":"general","question":"What practices reduce soil erosion?","must_mention_any":["erosion","conservation","bund","terrac","mulch"]}
+{"id":"unsupported-mango","type":"unsupported","crop":"mango","question":"How much water do mango orchards need?"}
+{"id":"unsupported-apple","type":"unsupported","crop":"apple","question":"Best irrigation schedule for apple trees"}
+{"id":"unsupported-coconut","type":"unsupported","crop":"coconut","question":"Fertilizer dose for coconut palms"}
+{"id":"unsupported-turmeric","type":"unsupported","crop":"turmeric","question":"Irrigation interval for turmeric"}
+{"id":"outofscope-capital","type":"out_of_scope","question":"What is the capital of France?"}

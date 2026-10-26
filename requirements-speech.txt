@@ -1,2 +1,3 @@
-# Speech synthesis uses the existing PyTorch and Transformers API environment.
-# The small per-language MMS-VITS weights are downloaded on first use.
+# Speech synthesis uses the PyTorch/Transformers environment from requirements-llm.txt.
+# The per-language MMS-TTS weights are fetched ONCE with:  python tools/download_models.py --speech
+-r requirements-llm.txt

@@ -1,0 +1,3 @@
+evaluation-results.json
+index/faiss.index
+index/vectors.npy

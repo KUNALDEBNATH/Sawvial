@@ -59,6 +59,13 @@ def validate_knowledge_unit(ku: Dict[str, Any], taxonomy: Taxonomy, cfg: Extract
             reasons.append(f"invalid_secondary_domain:{sd}")
             return ValidationResult(status="rejected", reasons=reasons)
 
+    if ku["quality"].get("document_incomplete"):
+        reasons.append("incomplete_document_extraction")
+        return ValidationResult(status="needs_review", reasons=reasons)
+    if ku["quality"].get("flags"):
+        reasons.append("flags:" + ",".join(ku["quality"]["flags"]))
+        return ValidationResult(status="needs_review", reasons=reasons)
+
     importance = ku["quality"].get("scientific_importance_score", 0.0)
     confidence = ku["quality"].get("metadata_confidence", 0.0)
 

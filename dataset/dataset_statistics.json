@@ -1,7 +1,7 @@
 {
   "total_documents": 186,
   "total_knowledge_units": 15764,
-  "total_qa_pairs": 6563,
+  "total_qa_pairs": 3784,
   "units_per_domain": {
     "unassigned": 5298,
     "soil_management": 4869,
@@ -223,5 +223,12 @@
       "domain": "soil_water_conservation_management",
       "share": 0.074
     }
-  ]
+  ],
+  "answerable_units": 5568,
+  "answerable_statuses": [
+    "validated",
+    "verified"
+  ],
+  "qa_pairs_unverified": 3784,
+  "statistics_recomputed_at": "2026-10-26T05:07:24.496858+00:00"
 }

@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Convert dataset/knowledge_units.jsonl -> chat-format SFT data (RAG-aware).
 
+NOTE: training answers are EXTRACTIVE (passage text), not verified scientific statements. After
+changing this file or the dataset, the LoRA adapter must be retrained to reflect it.
+
 Each training example = retrieved-style context (the true passage + 0-2 distractors)
 + question -> grounded answer with [ID] citation. ~5% are "not in context" refusals.
 Train/val split is by document so there is no leakage.
@@ -11,8 +14,9 @@ import argparse, hashlib, json, random
 from collections import defaultdict
 from pathlib import Path
 
-from common import (SYSTEM_PROMPT, NO_ANSWER, load_jsonl, usable_unit,
+from common import (SYSTEM_PROMPT, NO_ANSWER, load_jsonl, usable_unit, is_heldout_doc,
                     format_context, make_user_prompt, fix_grammar)
+from sawvial.validation.qa_checks import sft_usable
 
 
 def passage(ku):
@@ -22,7 +26,8 @@ def passage(ku):
 
 
 def is_val(doc_id, pct):
-    return int(hashlib.md5(doc_id.encode()).hexdigest(), 16) % 100 < pct
+    """Held-out documents (never trained on). Shared with evaluate_rag.py via common.is_heldout_doc."""
+    return is_heldout_doc(doc_id, pct)
 
 
 def main():
@@ -66,12 +71,15 @@ def main():
                              {"role": "assistant", "content": a}],
                 "meta": {"unit": ku["id"], "doc": ku["source"]["document_id"], "kind": kind}}
 
-    examples = []
+    examples, dropped = [], defaultdict(int)
     for ku in units:
         title = (ku["source"].get("title") or "").strip()
         for qa in ku.get("qa", [])[:2]:
-            ans = (qa.get("answer") or "").strip()
-            if len(ans) < 40 or ans == title:
+            # same sanity checks as tools/audit_dataset.py: no title-only / reference-list /
+            # off-topic / fragment answers (answers are trimmed to complete sentences)
+            ans, _issues = sft_usable(ku, qa)
+            if not ans or ans == title:
+                dropped["qa"] += 1
                 continue
             examples.append(example(ku, qa["question"], f"{fix_grammar(ans)} [{ku['id']}]",
                                     "qa", [ku] + distractors(ku, rnd.randint(0, 2))))
@@ -107,6 +115,7 @@ def main():
     for e in kept:
         kinds[e["meta"]["kind"]] += 1
     print(f"train={len(train)} val={len(val)} kinds={dict(kinds)} -> {out}")
+    print(f"QA pairs dropped by quality checks: {dropped['qa']}")
 
 
 if __name__ == "__main__":

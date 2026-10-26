@@ -1,374 +1,248 @@
 #!/usr/bin/env python3
-"""Evaluate SAWVIAL retrieval and answer behavior against local gold examples.
+"""Evaluate SAWVIAL retrieval and answer behaviour. Retrieval and citation quality are reported
+SEPARATELY, and nothing here claims scientific validity.
 
-Run ``python evaluate_rag.py --smoke`` for a small live-API regression check,
-or ``python evaluate_rag.py --limit 25`` to sample labeled dataset Q&A pairs.
-Custom JSONL cases can provide question, relevant_ids, reference_answer,
-history, and expected_format (for example, "one_line").
+    python evaluate_rag.py                       # local, no LLM/GPU needed: retrieval + crop + unsupported
+    python evaluate_rag.py --api http://localhost:8000      # end-to-end through a running API
+    python evaluate_rag.py --api http://localhost:8000 --multilingual
+
+Case sources
+  * HELD-OUT cases: QA pairs from documents for which common.is_heldout_doc() is true. That is the same
+    deterministic document split prepare_sft_data.py uses, so these documents are never in the
+    training set (assuming the adapter was trained from data made with the default --val_pct 5).
+  * CURATED cases (tests/eval_cases.jsonl): crop-specific, general, unsupported-crop, out-of-scope.
+    Checked with invariants (crop evidence really concerns the crop; unsupported crops are refused),
+    not with free-text judgement.
+
+Honest limits: automatic gold labels come from template QA (many questions are generic), so unit-level
+precision is expected to be low; doc_hit@k is the more meaningful retrieval number. Sets are small -
+read the printed warnings. Final answer quality needs review by an agronomist.
 """
 from __future__ import annotations
 
 import argparse
-from collections import Counter
 import json
 import math
 import random
-import re
 import statistics
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
-from urllib.error import HTTPError, URLError
+from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "llm"))
 
-SMOKE_CASES = [
-    {
-        "case_id": "farm-water-conservation",
-        "question": "Tell me how to conserve water in farming.",
-        "relevant_ids": ["SWM_012405"],
-    },
-    {
-        "case_id": "contextual-water-benefit",
-        "question": "How to use water so that can benefit?",
-        "history": [
-            {
-                "role": "user",
-                "content": "Tell me how to conserve water in farming.",
-            },
-            {
-                "role": "assistant",
-                "content": (
-                    "The dataset discusses irrigation scheduling and soil "
-                    "moisture monitoring to conserve water [SWM_012405]."
-                ),
-            },
-        ],
-        "relevant_ids": ["SWM_012405"],
-    },
-    {
-        "case_id": "water-one-line-after-followups",
-        "question": "Write it in one line.",
-        "history": [
-            {
-                "role": "user",
-                "content": "Tell me how to conserve water in farming.",
-            },
-            {
-                "role": "assistant",
-                "content": (
-                    "The dataset discusses irrigation scheduling and soil "
-                    "moisture monitoring to conserve water [SWM_012405]."
-                ),
-            },
-            {
-                "role": "user",
-                "content": "How to use water so that can benefit?",
-            },
-            {
-                "role": "assistant",
-                "content": (
-                    "The records connect irrigation scheduling and soil "
-                    "moisture monitoring with water conservation [SWM_012405]."
-                ),
-            },
-            {"role": "user", "content": "Make it short."},
-            {
-                "role": "assistant",
-                "content": (
-                    "Use irrigation scheduling and soil moisture monitoring "
-                    "to conserve water [SWM_012405]."
-                ),
-            },
-        ],
-        "relevant_ids": ["SWM_012405"],
-        "expected_format": "one_line",
-    },
-    {
-        "case_id": "potato-irrigation",
-        "question": "How do I grow potatoes using water properly?",
-        "relevant_ids": ["SWM_000671"],
-    },
-    {
-        "case_id": "potato-one-line-followup",
-        "question": "Write that in one line.",
-        "history": [
-            {"role": "user", "content": "How do I grow potatoes using water properly?"},
-            {
-                "role": "assistant",
-                "content": (
-                    "The records mention three irrigations for potato, but do not "
-                    "specify their timing or amount [SWM_000671]."
-                ),
-            },
-        ],
-        "relevant_ids": ["SWM_000671"],
-        "expected_format": "one_line",
-    },
-    {
-        "case_id": "soil-fertility",
-        "question": "I want to make my soil more fertile. How?",
-        "relevant_ids": ["SWM_003637", "SWM_002322", "SWM_002555"],
-    },
-    {
-        "case_id": "irrigation-efficiency",
-        "question": "How can I improve irrigation efficiency?",
-        "relevant_ids": ["SWM_012781", "SWM_014375", "SWM_012778"],
-    },
-]
+from common import is_heldout_doc                                            # noqa: E402
+from sawvial import settings                                                 # noqa: E402
+from sawvial.eligibility import is_answerable                                # noqa: E402
+from sawvial.validation.qa_checks import sft_usable                          # noqa: E402
 
 
 def load_jsonl(path: Path):
-    with path.open(encoding="utf-8") as stream:
-        for line_number, line in enumerate(stream, 1):
+    with path.open(encoding="utf-8") as f:
+        for n, line in enumerate(f, 1):
             if line.strip():
                 try:
                     yield json.loads(line)
                 except json.JSONDecodeError as exc:
-                    raise ValueError(f"{path}:{line_number}: invalid JSON: {exc}") from exc
+                    raise ValueError(f"{path}:{n}: invalid JSON: {exc}") from exc
 
 
-def usable_gold_units(dataset_dir: Path) -> set[str]:
-    valid = set()
-    for unit in load_jsonl(dataset_dir / "knowledge_units.jsonl"):
-        evidence = unit.get("knowledge", {}).get("evidence") or ""
-        source = unit.get("source", {})
-        status = unit.get("quality", {}).get("validation_status")
-        section = (source.get("section") or "").lower()
-        if (status in {"validated", "needs_review"} and len(evidence) >= 80
-                and len(evidence.split()) >= 12
-                and section not in {"references", "reference", "bibliography", "literature cited"}):
-            valid.add(unit["id"])
-    return valid
-
-
-def load_default_cases(dataset_dir: Path, limit: int, seed: int) -> list[dict]:
-    valid_ids = usable_gold_units(dataset_dir)
-    cases = []
-    for row in load_jsonl(dataset_dir / "qa.jsonl"):
-        unit_id = row.get("knowledge_unit_id")
-        question = (row.get("question") or "").strip()
-        reference = (row.get("answer") or "").strip()
-        if unit_id in valid_ids and len(question) >= 12 and len(reference) >= 60:
-            cases.append({
-                "case_id": f"{unit_id}:{len(cases) + 1}",
-                "question": question,
-                "relevant_ids": [unit_id],
-                "reference_answer": reference,
-            })
-    if not cases:
-        raise ValueError(f"No usable labeled Q&A cases found under {dataset_dir}")
+def heldout_cases(dataset_dir: Path, limit: int, seed: int, pct: int) -> tuple[list, dict]:
+    cases, docs = [], set()
+    for ku in load_jsonl(dataset_dir / "knowledge_units.jsonl"):
+        doc = ku["source"]["document_id"]
+        if not is_heldout_doc(doc, pct) or not is_answerable(ku):
+            continue
+        for qa in ku.get("qa", []):
+            answer, _ = sft_usable(ku, qa)
+            if answer:
+                docs.add(doc)
+                cases.append({"case_id": f"{ku['id']}:{len(cases)}", "type": "heldout", "question": qa["question"],
+                              "relevant_ids": [ku["id"]], "relevant_doc": doc, "reference_answer": answer})
     random.Random(seed).shuffle(cases)
-    return cases[:limit]
+    return cases[:limit], {"heldout_documents": len(docs), "heldout_pool": len(cases)}
 
 
-def load_custom_cases(path: Path) -> list[dict]:
-    cases = list(load_jsonl(path))
-    for number, case in enumerate(cases, 1):
-        if not isinstance(case.get("question"), str) or not case["question"].strip():
-            raise ValueError(f"{path}:{number}: each case needs a non-empty question")
-        ids = case.get("relevant_ids", [])
-        if isinstance(ids, str):
-            ids = [ids]
-        if not isinstance(ids, list) or any(not isinstance(value, str) for value in ids):
-            raise ValueError(f"{path}:{number}: relevant_ids must be a list of IDs")
-        case["relevant_ids"] = ids
-        if "history" in case and not isinstance(case["history"], list):
-            raise ValueError(f"{path}:{number}: history must be a list of chat turns")
-    return cases
+def retrieval_metrics(ids: list, relevant: set, k: int) -> dict:
+    hits = [i for i, u in enumerate(ids[:k]) if u in relevant]
+    ideal = sum(1 / math.log2(i + 2) for i in range(min(len(relevant), k)))
+    return {f"recall@{k}": len(hits) / len(relevant), "mrr": 1 / (hits[0] + 1) if hits else 0.0,
+            f"ndcg@{k}": (sum(1 / math.log2(i + 2) for i in hits) / ideal) if ideal else 0.0}
 
 
-def tokens(text: str) -> list[str]:
-    return re.findall(r"\w+", text.lower(), flags=re.UNICODE)
+def mean(rows, key):
+    v = [r[key] for r in rows if r.get(key) is not None]
+    return round(statistics.fmean(v), 4) if v else None
 
 
-def token_f1(prediction: str, reference: str) -> float:
-    predicted, expected = Counter(tokens(prediction)), Counter(tokens(reference))
-    overlap = sum((predicted & expected).values())
-    if not predicted or not expected or not overlap:
-        return 0.0
-    precision = overlap / sum(predicted.values())
-    recall = overlap / sum(expected.values())
-    return 2 * precision * recall / (precision + recall)
+def pct(values, q):
+    if not values:
+        return None
+    s = sorted(values)
+    return round(s[min(len(s) - 1, int(round(q * (len(s) - 1))))], 1)
 
 
-def rouge_l_f1(prediction: str, reference: str) -> float:
-    predicted, expected = tokens(prediction), tokens(reference)
-    if not predicted or not expected:
-        return 0.0
-    previous = [0] * (len(expected) + 1)
-    for predicted_token in predicted:
-        current = [0]
-        for index, expected_token in enumerate(expected, 1):
-            if predicted_token == expected_token:
-                current.append(previous[index - 1] + 1)
-            else:
-                current.append(max(previous[index], current[-1]))
-        previous = current
-    lcs = previous[-1]
-    precision = lcs / len(predicted)
-    recall = lcs / len(expected)
-    return 2 * precision * recall / (precision + recall) if lcs else 0.0
+# ------------------------------------------------------------------ local retrieval evaluation
+def eval_retrieval(args, cases, curated):
+    from sawvial.index.passages import retrieve_passages
+    from sawvial.index.retriever import load_index_bundle
+    bundle = load_index_bundle(args.index_dir, args.dataset_dir)
+    k, rows, lat = args.top_k, [], []
+    for c in cases:
+        t = time.perf_counter()
+        r = retrieve_passages(bundle, c["question"], k)
+        lat.append((time.perf_counter() - t) * 1000)
+        ids = [p["id"] for p in r["passages"]]
+        docs = [p["document_id"] for p in r["passages"]]
+        row = {"case_id": c["case_id"], **retrieval_metrics(ids, set(c["relevant_ids"]), k),
+               "doc_hit": float(c["relevant_doc"] in docs[:k]), "n_returned": len(ids)}
+        rows.append(row)
+    heldout = {"n_cases": len(rows), f"recall@{k}": mean(rows, f"recall@{k}"), "mrr": mean(rows, "mrr"),
+               f"ndcg@{k}": mean(rows, f"ndcg@{k}"), "doc_hit@k": mean(rows, "doc_hit"),
+               "empty_result_rate": round(sum(r["n_returned"] == 0 for r in rows) / len(rows), 4) if rows else None}
+
+    cur = []
+    for c in curated:
+        r = retrieve_passages(bundle, c["question"], k)
+        ps, kind, ok, why = r["passages"], c["type"], True, []
+        if kind == "crop":
+            if not ps:
+                ok, why = False, ["no passages for a crop the knowledge base should cover"]
+            for p in ps:
+                if not (p["crop_labeled"] or p["crop_mentions"] >= 2):
+                    ok = False; why.append(f"{p['id']} is not crop-specific")
+            if ps and not any(any(m.lower() in p["text"].lower() for m in c["must_mention_any"]) for p in ps):
+                ok = False; why.append("no passage mentions the topic")
+        elif kind == "unsupported":
+            if ps or not r["crop_missing"]:
+                ok, why = False, [f"expected 'no evidence for {c['crop']}', got {len(ps)} passages"]
+        elif kind == "general":
+            if not ps:
+                ok, why = False, ["no passages"]
+            elif not any(any(m.lower() in p["text"].lower() for m in c["must_mention_any"]) for p in ps):
+                ok, why = False, ["no passage mentions the topic"]
+        cur.append({"id": c["id"], "type": kind, "passed": ok, "problems": why, "n_passages": len(ps)})
+    return {"heldout_retrieval": heldout, "curated": cur,
+            "curated_pass_rate_by_type": {t: f"{sum(x['passed'] for x in cur if x['type']==t)}/{sum(1 for x in cur if x['type']==t)}"
+                                          for t in sorted({x['type'] for x in cur if x['type'] != 'out_of_scope'})},
+            "retrieval_latency_ms": {"mean": round(statistics.fmean(lat), 1) if lat else None,
+                                     "p50": pct(lat, .5), "p95": pct(lat, .95)},
+            "index": bundle["index_meta"]}
 
 
-def retrieval_metrics(retrieved: list[str], relevant: set[str], k: int) -> dict:
-    top_k = retrieved[:k]
-    hits = [index for index, unit_id in enumerate(top_k) if unit_id in relevant]
-    dcg = sum(1 / math.log2(index + 2) for index in hits)
-    ideal_hits = min(len(relevant), k)
-    ideal_dcg = sum(1 / math.log2(index + 2) for index in range(ideal_hits))
-    return {
-        f"precision@{k}": len(hits) / k,
-        f"recall@{k}": len(hits) / len(relevant) if relevant else None,
-        "reciprocal_rank": 1 / (hits[0] + 1) if hits else 0.0,
-        f"ndcg@{k}": dcg / ideal_dcg if ideal_dcg else None,
-    }
+# ------------------------------------------------------------------ end-to-end (API) evaluation
+def call_api(url, payload, timeout):
+    req = Request(url.rstrip("/") + "/api/ask", data=json.dumps(payload).encode(), method="POST",
+                  headers={"Content-Type": "application/json"})
+    t = time.perf_counter()
+    with urlopen(req, timeout=timeout) as resp:
+        body = json.loads(resp.read().decode())
+    return body, (time.perf_counter() - t) * 1000
 
 
-def ask_api(api_url: str, case: dict, top_k: int, timeout: int) -> dict:
-    payload = {
-        "question": case["question"],
-        "language": case.get("language", "en"),
-        "top_k": top_k,
-        "history": case.get("history", []),
-    }
-    request = Request(
-        api_url.rstrip("/") + "/api/ask",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
-
-
-def evaluate_case(case: dict, response: dict, k: int, latency_ms: float) -> dict:
-    answer = response.get("answer") or ""
-    sources = response.get("sources") or []
-    retrieved = [source.get("id", "") for source in sources if source.get("id")]
-    result = {
-        "case_id": case.get("case_id"),
-        "question": case["question"],
-        "answer": answer,
-        "grounded": bool(response.get("grounded")),
-        "latency_ms": round(latency_ms, 1),
-        "retrieved_ids": retrieved,
-        "metrics": {
-            **(
-                retrieval_metrics(retrieved, set(case["relevant_ids"]), k)
-                if case["relevant_ids"] else {}
-            ),
-            "cited_source_ratio": (
-                sum(bool(source.get("cited")) for source in sources) / len(sources)
-                if sources else 0.0
-            ),
-        },
-    }
-    if case.get("reference_answer"):
-        result["metrics"]["token_f1"] = token_f1(answer, case["reference_answer"])
-        result["metrics"]["rouge_l_f1"] = rouge_l_f1(answer, case["reference_answer"])
-    if case.get("expected_format") == "one_line":
-        result["metrics"]["one_line_compliance"] = float("\n" not in answer.strip())
-    return result
-
-
-def mean_metric(results: list[dict], name: str) -> float | None:
-    values = [
-        row["metrics"][name] for row in results
-        if name in row["metrics"] and row["metrics"][name] is not None
-    ]
-    return round(statistics.fmean(values), 4) if values else None
-
-
-def summarize(results: list[dict], k: int) -> dict:
-    return {
-        "cases": len(results),
-        f"precision@{k}": mean_metric(results, f"precision@{k}"),
-        f"recall@{k}": mean_metric(results, f"recall@{k}"),
-        "mrr": mean_metric(results, "reciprocal_rank"),
-        f"ndcg@{k}": mean_metric(results, f"ndcg@{k}"),
-        "grounded_rate": round(
-            sum(row["grounded"] for row in results) / len(results), 4,
-        ) if results else 0.0,
-        "cited_source_ratio": mean_metric(results, "cited_source_ratio"),
-        "token_f1": mean_metric(results, "token_f1"),
-        "rouge_l_f1": mean_metric(results, "rouge_l_f1"),
-        "one_line_compliance": mean_metric(results, "one_line_compliance"),
-        "mean_latency_ms": round(
-            statistics.fmean(row["latency_ms"] for row in results), 1,
-        ) if results else None,
-    }
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--api-url", default="http://localhost:8000")
-    parser.add_argument("--dataset-dir", type=Path, default=ROOT / "dataset")
-    parser.add_argument("--cases", type=Path, help="Custom benchmark cases in JSONL format")
-    parser.add_argument("--smoke", action="store_true", help="Run the built-in regression cases")
-    parser.add_argument("--limit", type=int, default=25, help="Number of dataset Q&A samples")
-    parser.add_argument("--top-k", type=int, default=5)
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--timeout", type=int, default=180)
-    parser.add_argument("--output", type=Path, default=ROOT / "evaluation-results.json")
-    args = parser.parse_args()
-
-    if args.top_k < 1 or args.limit < 1 or args.timeout < 1:
-        parser.error("--top-k, --limit, and --timeout must be positive")
-    if args.smoke and args.cases:
-        parser.error("--smoke and --cases cannot be used together")
-    if args.smoke:
-        cases = SMOKE_CASES
-    elif args.cases:
-        cases = load_custom_cases(args.cases)
-    else:
-        cases = load_default_cases(args.dataset_dir, args.limit, args.seed)
-
-    results = []
-    for index, case in enumerate(cases, 1):
-        started = time.perf_counter()
+def eval_api(args, cases, curated):
+    health = json.loads(urlopen(args.api.rstrip("/") + "/api/health", timeout=10).read().decode())
+    rows, k = [], args.top_k
+    allc = [dict(c, case_id=c["case_id"]) for c in cases[:args.api_limit]] + \
+           [dict(c, case_id=c["id"]) for c in curated]
+    if args.multilingual:
+        if not health.get("translator"):
+            print("multilingual: SKIPPED - translator model not loaded on the server")
+        else:
+            allc += [{"case_id": f"lang-{lang}", "type": "multilingual", "language": lang,
+                      "question": q} for lang, q in (("hi", "मिट्टी की उर्वरता कैसे बढ़ाएं?"),
+                                                    ("bn", "মাটির উর্বরতা কীভাবে বাড়ানো যায়?"))]
+    for i, c in enumerate(allc):
         try:
-            response = ask_api(args.api_url, case, args.top_k, args.timeout)
-        except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
-            print(f"[{index}/{len(cases)}] {case.get('case_id', case['question'])}: {exc}",
-                  file=sys.stderr)
-            return 1
-        elapsed_ms = (time.perf_counter() - started) * 1000
-        result = evaluate_case(case, response, args.top_k, elapsed_ms)
-        results.append(result)
-        mrr = result["metrics"].get("reciprocal_rank")
-        print(
-            f"[{index}/{len(cases)}] {case.get('case_id', case['question'][:48])} "
-            f"grounded={result['grounded']} rr={mrr if mrr is not None else 'n/a'} "
-            f"latency={elapsed_ms:.0f}ms"
-        )
+            res, ms = call_api(args.api, {"question": c["question"], "language": c.get("language", "en"), "top_k": k},
+                               args.timeout)
+        except (URLError, TimeoutError, OSError) as exc:
+            rows.append({"case_id": c["case_id"], "type": c["type"], "error": str(exc)})
+            continue
+        g, srcs = res.get("grounding", {}), res.get("sources", [])
+        retrieved = [s["id"] for s in srcs]
+        row = {"case_id": c["case_id"], "type": c["type"], "latency_ms": round(ms, 1), "warmup": i == 0,
+               "grounded": bool(res.get("grounded")), "status": g.get("status"),
+               "timings_ms": res.get("timings_ms", {}),
+               "invalid_citations": len(g.get("invalid_citations", [])),
+               "citation_coverage": (g["supported_claims"] / g["claims"]) if g.get("claims") else None,
+               "cited_source_ratio": (sum(s["cited"] for s in srcs) / len(srcs)) if srcs else None}
+        if c["type"] == "heldout":
+            row.update(retrieval_metrics(retrieved, set(c["relevant_ids"]), k))
+        if c["type"] == "unsupported":
+            row["correctly_refused"] = g.get("status") == "insufficient_evidence" and not res.get("grounded")
+        if c["type"] == "out_of_scope":
+            row["correctly_refused"] = not res.get("grounded")
+        if c["type"] == "multilingual":
+            row["answer_in_requested_language"] = res.get("answer_language") == c["language"]
+        rows.append(row)
+    ok = [r for r in rows if "error" not in r]
+    steady = [r["latency_ms"] for r in ok if not r["warmup"]]
+    answered = [r for r in ok if r["grounded"]]
+    stage = {s: round(statistics.fmean(r["timings_ms"][s] for r in ok if s in r["timings_ms"]), 1)
+             for s in ("translate_in", "retrieval", "generation", "grounding", "translate_out")
+             if any(s in r["timings_ms"] for r in ok)}
+    return {"server": {"llm": health.get("llm"), "translator": health.get("translator"), "index": health.get("index")},
+            "n_requests": len(rows), "n_errors": len(rows) - len(ok),
+            "citation": {"answered_rate": round(len(answered) / len(ok), 4) if ok else None,
+                         "mean_citation_coverage": mean(answered, "citation_coverage"),
+                         "invalid_citation_total": sum(r["invalid_citations"] for r in ok),
+                         "partially_supported": sum(r["status"] == "partially_supported" for r in ok),
+                         "extractive_fallback": sum(r["status"] == "extractive_fallback" for r in ok)},
+            "heldout_retrieval_via_api": {f"recall@{k}": mean([r for r in ok if r["type"] == "heldout"], f"recall@{k}"),
+                                          "mrr": mean([r for r in ok if r["type"] == "heldout"], "mrr")},
+            "unsupported_refused": f"{sum(bool(r.get('correctly_refused')) for r in ok if r['type']=='unsupported')}/"
+                                   f"{sum(1 for r in ok if r['type']=='unsupported')}",
+            "out_of_scope_refused": f"{sum(bool(r.get('correctly_refused')) for r in ok if r['type']=='out_of_scope')}/"
+                                    f"{sum(1 for r in ok if r['type']=='out_of_scope')}",
+            "multilingual": [{r["case_id"]: r["answer_in_requested_language"]} for r in ok if r["type"] == "multilingual"],
+            "latency_ms_excluding_first_request": {"mean": round(statistics.fmean(steady), 1) if steady else None,
+                                                   "p50": pct(steady, .5), "p95": pct(steady, .95)},
+            "mean_stage_ms": stage, "rows": rows}
 
-    report = {
-        "api_url": args.api_url,
-        "top_k": args.top_k,
-        "seed": args.seed,
-        "summary": summarize(results, args.top_k),
-        "results": results,
-        "metric_notes": {
-            "retrieval": "Gold knowledge-unit IDs are used for precision/recall, MRR, and nDCG.",
-            "answer_similarity": (
-                "Token F1 and ROUGE-L compare wording to references; valid paraphrases may score low."
-            ),
-            "faithfulness": (
-                "Not automatically judged: use human review or a calibrated LLM judge for factual "
-                "faithfulness. Grounded rate and cited-source ratio are not faithfulness scores."
-            ),
-        },
-    }
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n",
-                           encoding="utf-8")
-    print("\nAggregate metrics")
-    print(json.dumps(report["summary"], indent=2))
-    print(f"Detailed report: {args.output}")
-    return 0
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--api", help="base URL of a running api.py for end-to-end evaluation")
+    ap.add_argument("--dataset_dir", default=str(settings.DATASET_DIR)); ap.add_argument("--index_dir", default=str(settings.INDEX_DIR))
+    ap.add_argument("--limit", type=int, default=300, help="max held-out cases (local retrieval)")
+    ap.add_argument("--api_limit", type=int, default=20, help="max held-out cases sent through the API (each runs the LLM)")
+    ap.add_argument("--top_k", type=int, default=5); ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--val_pct", type=int, default=5, help="must equal the value used for prepare_sft_data.py")
+    ap.add_argument("--timeout", type=int, default=300); ap.add_argument("--multilingual", action="store_true")
+    ap.add_argument("--out_dir", default=str(ROOT / "eval_results"))
+    args = ap.parse_args()
+
+    cases, pool = heldout_cases(Path(args.dataset_dir), args.limit, args.seed, args.val_pct)
+    curated = list(load_jsonl(ROOT / "tests" / "eval_cases.jsonl"))
+    warnings = ["Not scientifically validated: automatic gold labels + lexical checks only; agronomist review required."]
+    if len(cases) < 30:
+        warnings.append(f"only {len(cases)} held-out cases - too few for reliable averages")
+    if args.api and len(cases[:args.api_limit]) < 30:
+        warnings.append(f"API run uses {len(cases[:args.api_limit])} held-out cases (LLM calls are slow) - indicative only")
+    report = {"generated_at": datetime.now(timezone.utc).isoformat(), "mode": "api" if args.api else "retrieval_only",
+              "split": {"val_pct": args.val_pct, **pool, "note": "held-out docs are excluded from SFT training"},
+              "warnings": warnings}
+    try:
+        report["results"] = eval_api(args, cases, curated) if args.api else eval_retrieval(args, cases, curated)
+    except (URLError, OSError) as exc:
+        sys.exit(f"Could not reach the API at {args.api}: {exc}\nStart it first: python api.py")
+    out = Path(args.out_dir); out.mkdir(exist_ok=True)
+    f = out / f"{report['mode']}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
+    f.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+    summary = {k: v for k, v in report["results"].items() if k not in ("rows", "curated", "index")}
+    print(json.dumps({"mode": report["mode"], "split": report["split"], **summary}, indent=2, ensure_ascii=False))
+    for w in warnings:
+        print("WARNING:", w)
+    bad = [c for c in report["results"].get("curated", []) if not c["passed"]]
+    for c in bad:
+        print(f"CURATED FAIL {c['id']}: {'; '.join(c['problems'])}")
+    print(f"\nFull results: {f}")
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()

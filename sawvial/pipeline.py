@@ -22,7 +22,8 @@ from typing import List, Dict, Any
 from tqdm import tqdm
 
 from sawvial.config import BuildConfig
-from sawvial.ingestion.pdf_loader import load_pdf
+from sawvial.eligibility import injection_flags
+from sawvial.ingestion.pdf_loader import PDFLoadError, load_pdf
 from sawvial.preprocessing.metadata_extractor import extract_metadata
 from sawvial.document_understanding.structure import build_structured_document
 from sawvial.chunking.semantic_chunker import build_candidate_chunks, CandidateChunk
@@ -38,7 +39,7 @@ from sawvial.dedup.deduplicator import deduplicate_documents, deduplicate_knowle
 from sawvial.dataset.writer import write_dataset
 from sawvial.statistics.stats import compute_statistics
 from sawvial.embeddings.embedder import load_embedder, embed_texts
-from sawvial.index.faiss_builder import build_faiss_index, persist_index
+from sawvial.index.faiss_builder import build_index
 
 log = logging.getLogger("sawvial.pipeline")
 
@@ -60,14 +61,25 @@ def process_document(pdf_path: Path, cfg: BuildConfig,
                       entity_extractor: ScientificEntityExtractor,
                       context_extractor: ContextExtractor,
                       importance_scorer: ImportanceScorer,
-                      classifier: DomainClassifier) -> tuple:
+                      classifier: DomainClassifier,
+                      raw_doc=None, meta_override: Dict[str, Any] | None = None,
+                      initial_status: str | None = None) -> tuple:
     """Runs the full per-document pipeline (structure -> chunk ->
     extract -> classify -> knowledge unit -> QA -> validate) and
-    returns (document_record, list_of_knowledge_units)."""
-    raw_doc = load_pdf(pdf_path)
+    returns (document_record, list_of_knowledge_units).
+
+    raw_doc / meta_override let the online-research workflow feed already-fetched documents
+    through the very same pipeline; initial_status (e.g. "pending_review") overrides the
+    automatic validation status of every resulting unit.
+    """
+    raw_doc = raw_doc or load_pdf(pdf_path, ocr=cfg.ocr, ocr_language=cfg.ocr_language)
     meta = extract_metadata(raw_doc)
-    doc_id = _document_id(str(pdf_path))
+    meta.update({k: v for k, v in (meta_override or {}).items() if v not in (None, "", [])})
+    doc_id = meta.get("document_id") or _document_id(str(pdf_path))
     meta["document_id"] = doc_id
+    meta["extraction"] = raw_doc.extraction.to_dict()
+    if raw_doc.extraction.status == "no_text":      # nothing to learn from; reported, not indexed
+        return {"document_id": doc_id, "metadata": meta, "full_text": "", "n_candidate_chunks": 0}, []
 
     structured = build_structured_document(raw_doc)
     full_text = raw_doc.full_plain_text
@@ -103,8 +115,16 @@ def process_document(pdf_path: Path, cfg: BuildConfig,
             chunk_type=chunk.chunk_type,
         )
         ku = build_knowledge_unit(ku_inputs, unit_id="PENDING")
+        ku["quality"]["document_incomplete"] = raw_doc.extraction.incomplete
+        flags = injection_flags(text)
+        if flags:                                  # instruction-like text inside a document
+            ku["quality"]["flags"] = ["possible_prompt_injection"]
+            ku["quality"]["flag_detail"] = flags
+        if initial_status:
+            ku["quality"]["forced_status"] = initial_status
 
-        if importance.total >= cfg.extraction.review_importance_score and ku["classification"]["primary_domain"]:
+        if (importance.total >= cfg.extraction.review_importance_score
+                and ku["classification"]["primary_domain"] and not initial_status):
             ku["qa"] = generate_qa(ku)
 
         knowledge_units.append(ku)
@@ -132,6 +152,7 @@ def run_build(cfg: BuildConfig) -> Dict[str, Any]:
     document_records: List[Dict[str, Any]] = []
     all_units: List[Dict[str, Any]] = []
 
+    ingestion: List[Dict[str, Any]] = []
     for pdf_path in tqdm(pdf_paths, desc="Processing documents"):
         try:
             doc_record, units = process_document(
@@ -139,8 +160,12 @@ def run_build(cfg: BuildConfig) -> Dict[str, Any]:
             )
             document_records.append(doc_record)
             all_units.extend(units)
-        except Exception as e:
+            ex = doc_record["metadata"]["extraction"]
+            ingestion.append({"file": str(pdf_path), "status": ex["status"], "units": len(units),
+                              "warnings": ex["warnings"]})
+        except (PDFLoadError, Exception) as e:       # recorded in ingestion_report.json
             log.warning(f"Skipped {pdf_path.name}: {e}")
+            ingestion.append({"file": str(pdf_path), "status": "failed", "units": 0, "warnings": [str(e)]})
 
     document_records = deduplicate_documents(document_records)
     kept_doc_ids = {d["document_id"] for d in document_records}
@@ -157,8 +182,10 @@ def run_build(cfg: BuildConfig) -> Dict[str, Any]:
     validation_log = []
     for ku in all_units:
         result = validate_knowledge_unit(ku, cfg.taxonomy, cfg.extraction)
-        ku["quality"]["validation_status"] = result.status
-        validation_log.append({"id": ku["id"], "status": result.status, "reasons": result.reasons})
+        forced = ku["quality"].pop("forced_status", None)
+        ku["quality"]["validation_status"] = forced or result.status
+        validation_log.append({"id": ku["id"], "status": ku["quality"]["validation_status"],
+                               "reasons": result.reasons})
 
     statuses = [v["status"] for v in validation_log]
     statistics = compute_statistics(document_records, all_units, statuses)
@@ -186,6 +213,13 @@ def run_build(cfg: BuildConfig) -> Dict[str, Any]:
         taxonomy_path=str(cfg.taxonomy.path),
     )
 
+    import json as _json
+    problems = [i for i in ingestion if i["status"] != "ok"]
+    with open(Path(cfg.output_dir) / "ingestion_report.json", "w", encoding="utf-8") as f:
+        _json.dump({"n_files": len(ingestion), "n_problem_files": len(problems), "files": ingestion},
+                   f, indent=2)
+    for i in problems:
+        log.warning("INGESTION %s: %s -> %s", i["status"].upper(), i["file"], "; ".join(i["warnings"]) or "-")
     log.info(f"Canonical dataset written to {cfg.output_dir}")
     log.info(f"Documents: {len(documents_out)} | Knowledge units: {len(all_units)} | "
              f"QA pairs: {statistics['total_qa_pairs']}")
@@ -198,46 +232,52 @@ def run_build(cfg: BuildConfig) -> Dict[str, Any]:
     }
 
 
-def run_embed_and_index(cfg: BuildConfig, knowledge_units: List[Dict[str, Any]] = None) -> None:
-    """Builds embeddings + FAISS index from the canonical dataset.
-    This is always a DERIVED step run after (and separately from) the
-    canonical dataset build."""
+def run_embed_and_index(cfg: BuildConfig, knowledge_units: List[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """(Re)builds the retrieval index from the canonical dataset. Always a DERIVED step.
+
+    Only answerable records are indexed (see sawvial/eligibility.py). The new index replaces
+    the old one atomically; on any failure the previous working index stays in place.
+    """
     import json
 
+    dataset_file = Path(cfg.output_dir) / "knowledge_units.jsonl"
     if knowledge_units is None:
-        knowledge_units = []
-        with open(Path(cfg.output_dir) / "knowledge_units.jsonl", encoding="utf-8") as f:
-            for line in f:
-                if line.strip():
-                    knowledge_units.append(json.loads(line))
+        with open(dataset_file, encoding="utf-8") as f:
+            knowledge_units = [json.loads(line) for line in f if line.strip()]
+    dense = None
+    if not cfg.embedding.offline:
+        embedder = load_embedder(cfg.embedding.model_name, False)
+        dense = embedder if hasattr(embedder, "model_name") else None   # TF-IDF fallback -> lexical only
+        if dense is None:
+            log.warning("Dense model unavailable; building a lexical-only index")
+    return build_index(knowledge_units, cfg.index_dir, dataset_file=dataset_file, dense_embedder=dense)
 
-    # Only embed validated (or evidence_only) units — rejected records
-    # should not surface as retrievable "knowledge".
-    embeddable = [ku for ku in knowledge_units
-                  if ku["quality"]["validation_status"] in ("validated", "needs_review", "evidence_only")]
 
-    if not embeddable:
-        log.warning("No embeddable knowledge units found; skipping index build.")
-        return
+def run_add_pdfs(cfg: BuildConfig, pdf_paths: List[Path]) -> Dict[str, Any]:
+    """Incrementally add PDFs to an existing dataset (no full rebuild, existing IDs unchanged)."""
+    from sawvial.dataset.writer import merge_into_dataset
 
-    texts = [ku["retrieval"]["semantic_text"] for ku in embeddable]
-    unit_ids = [ku["id"] for ku in embeddable]
-
-    embedder = load_embedder(cfg.embedding.model_name, cfg.embedding.offline)
-    vectors = embed_texts(embedder, texts)
-
-    index = build_faiss_index(vectors)
-
-    with open(Path(cfg.output_dir) / "dataset_statistics.json", encoding="utf-8") as f:
-        import json as _json
-        dataset_stats = _json.load(f)
-
-    embedding_meta = {
-        "model_name": getattr(embedder, "model_name", "tfidf"),
-        "offline": cfg.embedding.offline,
-        "dimension": int(vectors.shape[1]),
-        "normalize": cfg.embedding.normalize,
-    }
-
-    persist_index(cfg.index_dir, index, vectors, unit_ids, embedding_meta, dataset_stats)
-    log.info(f"FAISS index built and persisted to {cfg.index_dir} ({index.ntotal} vectors)")
+    entity_extractor = ScientificEntityExtractor(cfg.taxonomy)
+    context_extractor = ContextExtractor(cfg.taxonomy)
+    importance_scorer = ImportanceScorer(cfg.taxonomy)
+    classifier = DomainClassifier(cfg.taxonomy, entity_extractor)
+    docs, units, report = [], [], []
+    for path in pdf_paths:
+        try:
+            doc, new_units = process_document(Path(path), cfg, entity_extractor, context_extractor,
+                                              importance_scorer, classifier)
+        except Exception as exc:
+            report.append({"file": str(path), "status": "failed", "reason": str(exc)})
+            log.warning("Could not ingest %s: %s", path, exc)
+            continue
+        ex = doc["metadata"]["extraction"]
+        if ex["status"] == "no_text":
+            report.append({"file": str(path), "status": "no_text", "reason": "; ".join(ex["warnings"])})
+            continue
+        docs.append(doc)
+        units.extend(new_units)
+        report.append({"file": str(path), "status": ex["status"], "units": len(new_units),
+                       "warnings": ex["warnings"]})
+    result = merge_into_dataset(cfg.output_dir, docs, units, cfg.taxonomy, cfg.extraction)
+    result["files"] = report
+    return result

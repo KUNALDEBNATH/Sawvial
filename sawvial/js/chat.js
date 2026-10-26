@@ -41,8 +41,8 @@
     kn: "Kannada", mr: "Marathi", en: "English",
   };
 
-  /* Keywords used to route a typed question to a demo answer.
-     Replace with your real intent detection / retrieval. */
+  /* Keywords used ONLY to pick the small topic tag shown above an answer (UI label).
+     They never choose or generate an answer - answers come from the API. */
   const TOPIC_HINTS = {
     water: ["water", "irrigat", "पानी", "सिंचाई", "நீர", "பாய்ச்ச", "నీరు", "ನೀರು", "पाणी", "জল", "সেচ"],
     soil: ["soil", "manure", "compost", "fertil", "yellow", "मिट्टी", "खाद", "மண்", "உரம்", "నేల", "ఎరువు", "ಮಣ್ಣು", "माती", "মাটি", "সার"],
@@ -195,24 +195,58 @@
   }
 
   /* ---------- sources (from the API) ---------- */
+  // Only absolute http(s) URLs may become links; DOIs are validated and turned into doi.org links.
+  function safeHref(u) {
+    try {
+      const x = new URL(u);
+      return (x.protocol === "https:" || x.protocol === "http:") ? x.href : null;
+    } catch (e) { return null; }
+  }
+  function doiHref(d) {
+    return d && /^10\.\d{4,9}\/\S+$/.test(d) ? "https://doi.org/" + encodeURI(d) : null;
+  }
+  function linkHtml(href, label) {
+    return '<a href="' + escapeHtml(href) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(label) + "</a>";
+  }
+
   function sourcesHtml(sources) {
     if (!sources || !sources.length) return "";
     const items = sources.map(function (s) {
-      const title = s.title ? escapeHtml(s.title) : "";
-      const page = s.page ? " · p." + escapeHtml(s.page) : "";
-      return '<li><span class="src-id">' + escapeHtml(s.id) + "</span> " + title + page + "</li>";
+      const authors = (s.authors || []).filter(Boolean);
+      const who = authors.length ? authors.slice(0, 3).join(", ") + (authors.length > 3 ? " et al." : "") : "";
+      const head = [who, s.year ? "(" + s.year + ")" : ""].filter(Boolean).join(" ");
+      const venue = [s.journal, s.page ? "p." + s.page : ""].filter(Boolean).join(", ");
+      const doi = doiHref(s.doi), url = safeHref(s.url);
+      const links = [];
+      if (doi) links.push(linkHtml(doi, "DOI"));
+      if (url) links.push(linkHtml(url, t("chat.sourceOpen") === "chat.sourceOpen" ? "Source" : t("chat.sourceOpen")));
+      const title = escapeHtml(s.title || "");
+      return '<li><span class="src-id">' + escapeHtml(s.id) + "</span> " +
+        (head ? escapeHtml(head) + ". " : "") + (title ? "<em>" + title + "</em>. " : "") +
+        (venue ? escapeHtml(venue) + ". " : "") +
+        (links.length ? '<span class="src-links">' + links.join(" · ") + "</span>"
+                      : '<span class="src-nolink">(' + escapeHtml(t("chat.noLink")) + ")</span>") + "</li>";
     }).join("");
     return (
-      '<details class="sources"><summary>' + escapeHtml(t("chat.sources")) +
+      '<details class="sources" open><summary>' + escapeHtml(t("chat.sources")) +
       " (" + sources.length + ")</summary><ul>" + items + "</ul></details>"
     );
+  }
+
+  const NOTE_KEYS = { single_source: "chat.noteSingle", partially_supported: "chat.notePartial",
+                      extractive_fallback: "chat.noteExtractive", translation_unavailable: "chat.noteTranslation" };
+  function notesHtml(notes) {
+    if (!notes || !notes.length) return "";
+    return '<div class="notes">' + notes.filter(function (n) { return NOTE_KEYS[n]; })
+      .map(function (n) { return "<span>" + escapeHtml(t(NOTE_KEYS[n])) + "</span>"; }).join(" ") + "</div>";
   }
 
   function pickSources(list) {
     list = list || [];
     const cited = list.filter(function (s) { return s.cited; });
     return (cited.length ? cited : list).slice(0, 4).map(function (s) {
-      return { id: s.id, title: s.title, page: s.page };
+      return { id: s.id, title: s.title, authors: s.authors, year: s.year, journal: s.journal,
+               doi: s.doi, url: s.url, page: s.page };
     });
   }
 
@@ -223,7 +257,10 @@
       ".sources summary{cursor:pointer;font-weight:600}" +
       ".sources ul{margin:6px 0 0;padding-left:18px}" +
       ".sources li{margin:3px 0;line-height:1.35}" +
-      ".src-id{font-family:ui-monospace,Consolas,monospace;font-size:11px;opacity:.7}";
+      ".src-id{font-family:ui-monospace,Consolas,monospace;font-size:11px;opacity:.7}" +
+      ".src-links a{text-decoration:underline}.src-nolink{opacity:.65;font-style:italic}" +
+      ".notes{margin-top:8px;font-size:12.5px;opacity:.8;font-style:italic}.notes span+span:before{content:' · '}" +
+      ".retry-row{margin-top:10px}.retry{cursor:pointer}";
     document.head.appendChild(st);
   })();
 
@@ -275,7 +312,8 @@
       botAvatar() +
       '<div class="body">' +
       '<div class="meta">SAWVIAL <span class="tag">' + meta.icon + " " + label + "</span></div>" +
-      '<div class="text">' + escapeHtml(m.text) + "</div>" +
+      '<div class="text"' + (m.lang ? ' lang="' + escapeHtml(m.lang) + '"' : "") + ">" + escapeHtml(m.text) + "</div>" +
+      notesHtml(m.notes) +
       sourcesHtml(m.sources) +
       '<div class="actions">' +
       '<button class="act" data-speak="' + index + '"><svg viewBox="0 0 24 24" fill="none"><path d="M11 5 6 9H3v6h3l5 4V5Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M16 9a4 4 0 0 1 0 6M19 6a8 8 0 0 1 0 12" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg><span data-speak-label>' + escapeHtml(t("chat.listen")) + '</span></button>' +
@@ -367,6 +405,9 @@
       const answer = ((res && res.answer) || "").trim();
       if (!answer) throw new Error("empty answer");
       const sources = res.grounded ? pickSources(res.sources) : [];
+      const answerLang = res.answer_language || code;
+      const notes = ((res.grounding && res.grounding.notes) || []).slice();
+      if (res.note === "translation_unavailable") notes.push("translation_unavailable");
 
       const meta = topicLabels[topic] || topicLabels.crop;
       holder.querySelector(".meta").innerHTML =
@@ -377,7 +418,8 @@
 
       typeOut(textEl, answer, function (displayedText) {
         if (chatRef && displayedText.trim()) {
-          chatRef.messages.push({ role: "bot", text: displayedText, topic: topic, sources: sources });
+          chatRef.messages.push({ role: "bot", text: displayedText, topic: topic, sources: sources,
+                                  lang: answerLang, notes: notes });
         }
         save();
         busy = false;
@@ -393,11 +435,26 @@
       activeRequestId = null;
       activeHolder = null;
       console.error("SAWVIAL API error:", err);
+      const key = err && err.status === 429 ? "chat.errorBusy"
+        : err && err.status === 503 ? "chat.errorStarting" : "chat.error";
       const textEl = document.createElement("div");
       textEl.className = "text";
-      textEl.textContent = t("chat.error");
+      textEl.textContent = t(key);
+      const retry = document.createElement("div");
+      retry.className = "retry-row";
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "act retry";
+      btn.textContent = t("chat.retry");
+      btn.addEventListener("click", function () {
+        if (busy) return;
+        holder.remove();
+        respond(question, topic, history);      // same question + history, no duplicate user bubble
+      });
+      retry.appendChild(btn);
       const dots = holder.querySelector(".dots");
       if (dots) dots.replaceWith(textEl);
+      textEl.after(retry);
       busy = false;
       updateSend();
       scrollDown();
@@ -458,66 +515,73 @@
     scrollDown();
   }
 
-  /* ---------- speech in ---------- */
+  /* ---------- speech in ----------
+     Recognition uses the browser's Web Speech API (Chrome/Edge send audio to the browser vendor's
+     online service; there is no local speech-to-text). If it fails we show why and keep the text box
+     ready. We NEVER submit a substitute question. */
+  function micProblem(key) {
+    stopListening();
+    toast(t(key));
+    el.input.focus();
+  }
+
   function startListening() {
     if (busy) return;
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    const code = getSelectedLanguage() || "en";
-
-    if (!getSelectedLanguage()) {
+    const code = getSelectedLanguage();
+    if (!code) {
       window.location.href = "language.html?redirect=ask.html";
       return;
     }
-
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      micProblem("chat.micUnsupported");
+      return;
+    }
     el.composer.classList.add("recording");
     el.mic.classList.add("rec");
     el.recLabel.textContent = t("chat.listening");
 
-    if (SR) {
-      try {
-        recognition = new SR();
-        recognition.lang = SPEECH_LOCALE[code] || "en-IN";
-        recognition.interimResults = true;
-        recognition.continuous = false;
-
-        let finalText = "";
-        recognition.onresult = function (ev) {
-          let interim = "";
-          for (let i = ev.resultIndex; i < ev.results.length; i++) {
-            if (ev.results[i].isFinal) finalText += ev.results[i][0].transcript;
-            else interim += ev.results[i][0].transcript;
-          }
-          el.recLabel.textContent = (finalText + interim) || t("chat.listening");
-        };
-        recognition.onerror = function () {
-          stopListening();
-          fallbackTranscript();
-        };
-        recognition.onend = function () {
-          stopListening();
-          if (finalText.trim()) ask(finalText.trim());
-          else fallbackTranscript();
-        };
-        recognition.start();
-        return;
-      } catch (e) {
-        recognition = null;
-      }
+    try {
+      recognition = new SR();
+      recognition.lang = SPEECH_LOCALE[code] || "en-IN";
+      recognition.interimResults = true;
+      recognition.continuous = false;
+    } catch (e) {
+      recognition = null;
+      micProblem("chat.micError");
+      return;
     }
-
-    // No speech API available — simulate so the flow can still be demoed.
-    setTimeout(function () {
+    let finalText = "";
+    let failed = false;
+    recognition.onresult = function (ev) {
+      let interim = "";
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        if (ev.results[i].isFinal) finalText += ev.results[i][0].transcript;
+        else interim += ev.results[i][0].transcript;
+      }
+      el.recLabel.textContent = (finalText + interim) || t("chat.listening");
+    };
+    recognition.onerror = function (ev) {
+      failed = true;
+      const e = ev && ev.error;
+      micProblem(e === "not-allowed" || e === "service-not-allowed" ? "chat.micDenied"
+        : e === "no-speech" ? "chat.micNoSpeech"
+        : e === "network" ? "chat.micNetwork"
+        : e === "language-not-supported" ? "chat.micLang" : "chat.micError");
+    };
+    recognition.onend = function () {
+      const text = finalText.trim();
       stopListening();
-      fallbackTranscript();
-    }, 2200);
-  }
-
-  function fallbackTranscript() {
-    const code = getSelectedLanguage() || "en";
-    const keys = Object.keys(demoSampleQuestions);
-    const topic = keys[Math.floor(Math.random() * keys.length)];
-    const q = demoSampleQuestions[topic][code] || demoSampleQuestions[topic].en;
-    ask(q, topic);
+      if (failed) return;
+      if (text) ask(text);                       // same pipeline as typed questions
+      else micProblem("chat.micNoSpeech");
+    };
+    try {
+      recognition.start();
+    } catch (e) {
+      recognition = null;
+      micProblem("chat.micError");
+    }
   }
 
   function stopListening() {
@@ -570,17 +634,23 @@
     });
   }
 
-  function speak(text, btn) {
+  function speak(text, btn, msgLang) {
     if (activeSpeech && activeSpeech.button === btn) {
       stopSpeech();
       return;
     }
     stopSpeech();
-    const code = getSelectedLanguage() || "en";
-    if (["bn", "mr", "en"].indexOf(code) !== -1 && window.sawvialSpeak) {
+    // speak in the language the answer is actually written in (it may be English if translation failed)
+    const code = msgLang || getSelectedLanguage() || "en";
+    const local = ((window.SAWVIAL_CAPS && window.SAWVIAL_CAPS.speech_local) || []).indexOf(code) !== -1;
+    if (local && window.sawvialSpeak) {
       speakWithLocalVoice(text, code, btn);
       return;
     }
+    speakWithBrowser(text, btn, code);
+  }
+
+  function speakWithBrowser(text, btn, code) {
     if (!("speechSynthesis" in window)) {
       toast(t("chat.noAudio"));
       return;
@@ -603,6 +673,7 @@
         return;
       }
       u.voice = voice;
+      if (code !== "en") toast(t("chat.browserVoice"));
       window.speechSynthesis.speak(u);
     }).catch(function (err) {
       if (activeSpeech && activeSpeech.utterance === u) stopSpeech();
@@ -691,8 +762,8 @@
     }).catch(function (err) {
       if (activeSpeech !== speech || err.name === "AbortError") return;
       stopSpeech();
-      console.error("Could not synthesize speech:", err);
-      toast(t("chat.speechError"));
+      console.error("Could not synthesize speech locally:", err);
+      speakWithBrowser(text, btn, code);        // local voice failed -> try the browser voice
     });
   }
 
@@ -782,7 +853,7 @@
     if (speakBtn) {
       const chat = current();
       const m = chat && chat.messages[+speakBtn.getAttribute("data-speak")];
-      if (m) speak(m.text, speakBtn);
+      if (m) speak(m.text, speakBtn, m.lang);
       return;
     }
     const copyBtn = ev.target.closest("[data-copy]");
@@ -825,7 +896,8 @@
 
   el.mic.addEventListener("click", function () {
     if (el.composer.classList.contains("recording")) {
-      stopListening();
+      if (recognition) { try { recognition.stop(); } catch (e) { stopListening(); } }
+      else stopListening();
     } else {
       startListening();
     }

@@ -16,7 +16,13 @@ from sawvial.ingestion.pdf_loader import RawDocument
 
 _DOI_RE = re.compile(r"\b10\.\d{4,9}/[^\s\"<>]+", re.IGNORECASE)
 _YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
-_GENERIC_TITLE_RE = re.compile(r"^(microsoft word|untitled|document\d*)", re.IGNORECASE)
+_GENERIC_TITLE_RE = re.compile(
+    r"^(microsoft (word|powerpoint|excel)|untitled|document\d*|slide \d+|"
+    r".*\.(pmd|docx?|pdf|indd|qxd|tex|pptx?|rtf|tmp|p65|cdr)\s*$)", re.IGNORECASE)
+# PDF "author" fields that name software/machines, not people
+_GENERIC_AUTHORS = {"microsoft", "admin", "administrator", "user", "unknown", "author", "owner",
+                    "windows user", "pc", "hp", "dell", "adobe", "acrobat", "compaq", "default",
+                    "publisher", "elsevier", "springer", "wiley", "icar", "ijas"}
 
 
 def _first_page_text(doc: RawDocument, n_chars: int = 3000) -> str:
@@ -47,7 +53,9 @@ def _guess_authors(pdf_meta_author: str) -> List[str]:
     if not pdf_meta_author:
         return []
     parts = re.split(r";|,|\band\b", pdf_meta_author)
-    return [p.strip() for p in parts if p.strip() and len(p.strip()) > 1]
+    return [p.strip() for p in parts if len(p.strip()) > 1
+            and p.strip().lower() not in _GENERIC_AUTHORS
+            and not re.search(r"\b(microsoft|adobe|acrobat|latex)\b", p, re.I)]
 
 
 def extract_metadata(doc: RawDocument) -> Dict[str, Any]:

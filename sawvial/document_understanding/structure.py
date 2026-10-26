@@ -14,7 +14,9 @@ Heuristics used (deterministic, no external ML model required):
          body-text font size (from pdf_loader's TextBlock metadata)
   2. Paragraphs are formed by grouping consecutive body-text lines
      until a heading, blank gap, or table boundary is hit.
-  3. Table blocks are attached to the section they physically follow.
+  3. Tables are attached to the section that is current at the table's position in
+     reading order (the first text block that lies inside the table's bounding box marks
+     that position). The duplicate cell text is not also emitted as a paragraph.
 
 This is intentionally conservative: if no structure can be detected
 (e.g. an extension leaflet with no headings), the whole document
@@ -135,13 +137,26 @@ def build_structured_document(raw_doc: RawDocument) -> StructuredDocument:
         paragraph_buffer = []
         buffer_page = None
 
+    def inside(block: TextBlock, table: TableBlock) -> bool:
+        x0, y0, x1, y1 = table.bbox
+        bx0, by0, bx1, by1 = block.bbox
+        return bx0 >= x0 - 2 and bx1 <= x1 + 2 and by0 >= y0 - 2 and by1 <= y1 + 2
+
     for page in raw_doc.pages:
         prev_bbox_bottom = None
         prev_line_height = None
+        attached = set()
         for block in page.blocks:
             line = block.text.strip()
             if not line:
                 continue
+            table_hit = next((ti for ti, t in enumerate(page.tables) if inside(block, t)), None)
+            if table_hit is not None:
+                if table_hit not in attached:          # first cell text = the table's position
+                    flush_buffer()
+                    current.tables.append(page.tables[table_hit])
+                    attached.add(table_hit)
+                continue                               # cell text lives in the table chunk
             heading = _is_heading_block(block, body_font_size)
             if heading:
                 flush_buffer()
@@ -155,12 +170,8 @@ def build_structured_document(raw_doc: RawDocument) -> StructuredDocument:
             bottom = block.bbox[3]
             line_height = max(bottom - top, 1.0)
 
-            # Paragraph break heuristic: a vertical gap noticeably larger
-            # than the previous line's height indicates a new paragraph
-            # (blank-line spacing) rather than a mere line wrap within the
-            # same paragraph. This keeps genuinely related sentences
-            # together while separating distinct paragraphs, instead of
-            # merging an entire section into one giant paragraph.
+            # A vertical gap noticeably larger than the previous line's height marks a new
+            # paragraph rather than a line wrap.
             if (prev_bbox_bottom is not None and prev_line_height is not None
                     and (top - prev_bbox_bottom) > prev_line_height * 0.6):
                 flush_buffer()
@@ -171,15 +182,16 @@ def build_structured_document(raw_doc: RawDocument) -> StructuredDocument:
             prev_bbox_bottom = bottom
             prev_line_height = line_height
 
-            # Cap buffer growth so very long runs still get split into
-            # digestible paragraphs even without a detected gap.
             if len(" ".join(paragraph_buffer)) > 1200:
                 flush_buffer()
                 prev_bbox_bottom = None
                 prev_line_height = None
-        # attach any tables found on this page to the current section
-        if page.tables:
-            current.tables.extend(page.tables)
+        # tables with no text block inside them (e.g. image tables) cannot be placed by
+        # position; attach them at the end of the page rather than losing them
+        for ti, table in enumerate(page.tables):
+            if ti not in attached:
+                flush_buffer()
+                current.tables.append(table)
     flush_buffer()
 
     # Drop entirely empty sections (can happen if a heading was immediately
