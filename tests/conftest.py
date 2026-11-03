@@ -64,7 +64,9 @@ def make_text_pdf(path, crop="groundnut"):
     pg.insert_text((72, 110), "Abstract", fontsize=13)
     y = 130
     for ln in [f"Drip irrigation increased pod yield of {crop} by 18% over flood irrigation in the summer season.",
-               "Water use efficiency also improved in loamy sand soils under drip irrigation at Coimbatore."]:
+               "Water use efficiency also improved in loamy sand soils under drip irrigation at Coimbatore.",
+               "Soil moisture was recorded weekly and irrigation scheduling followed pan evaporation during the season.",
+               "The experiment was replicated three times in a randomised block design on farmers fields."]:
         pg.insert_text((72, y), ln, fontsize=10); y += 14
     pg.insert_text((72, 200), "Results", fontsize=13)
     cells = ["Treatment", "Yield", "WUE", "Drip", "2.4", "5.1", "Flood", "2.0", "3.9"]

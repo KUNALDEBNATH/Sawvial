@@ -119,3 +119,12 @@ def inspect_adapter(adapter_dir: str | Path, base_model: str,
     if res.problems:
         res.status = "invalid"
     return res
+
+
+def hf_cached(repo_id: str, filename: str = "config.json") -> bool:
+    """True if `repo_id` is already in the local Hugging Face cache (no network, no torch import)."""
+    try:
+        from huggingface_hub import try_to_load_from_cache
+        return isinstance(try_to_load_from_cache(repo_id, filename), str)
+    except Exception:
+        return False

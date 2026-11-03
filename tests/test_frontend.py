@@ -16,6 +16,7 @@ def js(name):
 def test_no_demo_question_fallback_in_speech_code():
     chat = js("chat.js")
     assert "fallbackTranscript" not in chat
+    assert "res.answer_language" not in chat          # answer_language is the REQUESTED language; text_language is the real one
     assert "demoAnswers" not in js("script.js") and "demoAnswers" not in chat
     # nothing may pick a question at random
     assert not re.search(r"Math\.random\(\)[^;\n]*(Sample|question)", chat, re.I)
@@ -31,7 +32,8 @@ def test_js_files_parse():
 
 def test_new_i18n_keys_exist_in_all_seven_languages():
     text = js("i18n.js")
-    for key in ("chat.micDenied", "chat.micNoSpeech", "chat.micUnsupported", "chat.retry", "chat.noLink", "chat.noteSingle"):
+    for key in ("chat.micDenied", "chat.micNoSpeech", "chat.micUnsupported", "chat.retry", "chat.noLink", "chat.noteSingle",
+                "chat.stageOnline", "chat.stageReading", "chat.noteWeb", "chat.noteDiffering", "chat.kindOfficial", "chat.sourceOpen"):
         block = text[text.index(f'"{key}"'):]
         block = block[:block.index("},")]
         for lang in ("en", "hi", "bn", "ta", "te", "kn", "mr"):
@@ -50,4 +52,4 @@ def test_real_dom_behaviour():
     r = subprocess.run(["node", str(WEB.parent / "tests" / "frontend" / "dom_test.js")], capture_output=True, text=True,
                        env=dict(os.environ), timeout=120)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "5 frontend DOM tests passed" in r.stdout
+    assert "13 frontend DOM tests passed" in r.stdout

@@ -97,6 +97,7 @@ def build_index(units: Iterable[Dict[str, Any]], index_dir: str | Path,
             "indexed_status_counts": status_counts,
             "dataset_file": str(dataset_file) if dataset_file else None,
             "dataset_sha256": file_sha256(Path(dataset_file)) if dataset_file else None,
+            "sklearn_version": __import__("sklearn").__version__,      # the saved vectorizer is only valid for this version
             "lexical": {"type": "tfidf(1,2)-sparse-cosine", "n_features": int(matrix.shape[1])},
             "dense": dense_meta,
         }

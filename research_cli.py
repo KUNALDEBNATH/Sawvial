@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """SAWVIAL online research workflow (command line).
 
-    python research_cli.py search "effect of drip irrigation on groundnut yield"   # search + fetch + compare
+    python research_cli.py search "which soil is good for tomatoes"                # search + fetch + compare
     python research_cli.py url https://example.org/paper.pdf                       # ingest one document
     python research_cli.py list [--status pending_review]                          # see collected records
     python research_cli.py show SWR_000001                                         # read one record
@@ -25,7 +25,7 @@ from sawvial.research.store import ResearchStore
 
 def _print_outcomes(rows):
     for o in rows:
-        mark = {"ok": "OK  ", "duplicate": "DUP ", "failed": "FAIL"}.get(o["status"], o["status"])
+        mark = {"ok": "OK  ", "duplicate": "DUP ", "cached": "HIT ", "failed": "FAIL"}.get(o["status"], o["status"])
         extra = f"+{o.get('records_added', 0)} records" if o["status"] == "ok" else (o.get("reason") or "")
         print(f"  [{mark}] {(o.get('title') or o['url'])[:80]}  {extra}")
         for w in o.get("warnings", []):
@@ -39,7 +39,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("search"); s.add_argument("question"); s.add_argument("--max", type=int, default=5)
-    s.add_argument("--provider", choices=["openalex", "crossref", "none"]); s.add_argument("--ocr", action="store_true")
+    s.add_argument("--provider", choices=["auto", "openalex", "crossref", "none"]); s.add_argument("--ocr", action="store_true")
     u = sub.add_parser("url"); u.add_argument("url"); u.add_argument("--ocr", action="store_true")
     l = sub.add_parser("list"); l.add_argument("--status")
     sh = sub.add_parser("show"); sh.add_argument("id")
@@ -52,12 +52,14 @@ def main():
 
     if a.cmd in ("search", "url", "publish"):
         from sawvial.research import workflow
-        pipe = workflow.Pipeline()
+        pipe = workflow.get_pipeline()
     if a.cmd == "search":
         rep = workflow.research(a.question, store, pipe, max_results=a.max, provider=a.provider, ocr=a.ocr)
         if rep["search"]["status"] != "ok":
             print(f"SEARCH FAILED: {rep['search']['reason']}\nNothing was fetched or stored.")
             sys.exit(2)
+        for p in rep["search"].get("providers", []):
+            print(f"  provider {p['provider']:<9} {p['status']:<14} results={p['results']}" + (f"  ({p['error']})" if p.get("error") else ""))
         print(f"Search ok: {rep['search']['candidates']} candidates; fetch results:")
         _print_outcomes(rep["fetched"])
         print("\nEvidence found (extractive quotes; NOT verified):")
@@ -69,9 +71,10 @@ def main():
             print(f"  - gap: {g}")
         print(f"\nReport saved: {rep['report_file']}\nReview with: python research_cli.py list --status pending_review")
     elif a.cmd == "url":
-        o = workflow.ingest_url(a.url, store, pipe, ocr=a.ocr)
+        # you chose this URL yourself, so the trust-tier filter is off; the tier is still recorded on the record
+        o = workflow.ingest_url(a.url, store, pipe, ocr=a.ocr, min_trust="any")
         _print_outcomes([o])
-        sys.exit(0 if o["status"] in ("ok", "duplicate") else 2)
+        sys.exit(0 if o["status"] in ("ok", "duplicate", "cached") else 2)
     elif a.cmd == "list":
         for r in store.records(a.status):
             print(f"{r['id']}  {r['quality']['validation_status']:<14} {(r['source'].get('title') or '')[:55]:<55} "
@@ -86,7 +89,9 @@ def main():
             sys.exit(f"ERROR: {exc}")
         print(f"{a.cmd}: {len(changed)} record(s) updated. Run `python research_cli.py publish` to make verified records searchable.")
     elif a.cmd == "publish":
-        print(json.dumps(workflow.publish_verified(store, settings.DATASET_DIR, settings.INDEX_DIR, pipe), indent=2))
+        res = workflow.publish_verified(store, settings.DATASET_DIR, settings.INDEX_DIR, pipe)
+        print(json.dumps(res, indent=2))
+        sys.exit(1 if res.get("rolled_back") else 0)
 
 
 if __name__ == "__main__":

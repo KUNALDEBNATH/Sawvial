@@ -9,6 +9,8 @@ from sawvial.index.retriever import load_index_bundle
 
 @pytest.fixture()
 def client(built, monkeypatch):
+    from sawvial import settings
+    monkeypatch.setattr(settings, "ONLINE_RESEARCH", False)      # these tests cover the LOCAL path; research has its own tests
     monkeypatch.setitem(api.CFG, "mock", False)
     api.STATE.clear()
     api.STATE.update(bundle=load_index_bundle(built["index"], built["dataset"]), embedder=None, tok=None,
@@ -116,7 +118,7 @@ def test_lock_not_held_during_retrieval_or_grounding(client, monkeypatch):
 def test_missing_translator_degrades_to_english(client):
     set_llm(good_llm)
     j = client.post("/api/ask", json={"question": "mulching moisture conservation", "language": "hi"}).json()
-    assert j["language"] == "hi" and j["answer_language"] == "en" and j["note"] == "translation_unavailable"
+    assert j["answer_language"] == "hi" and j["text_language"] == "en" and "translation_unavailable" in j["warnings"]
 
 
 def test_health_reports_adapter_and_index(client):

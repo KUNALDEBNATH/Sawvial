@@ -70,6 +70,25 @@ class ResearchStore:
                 return s
         return None
 
+    def find_cached_source(self, url: str, max_age_days: int) -> Optional[Dict[str, Any]]:
+        """A source we already downloaded from this URL recently (re-used instead of downloading again)."""
+        now, want = datetime.now(timezone.utc), _norm_url(url)
+        for s in self.sources():
+            if want in (_norm_url(s.get("requested_url")), _norm_url(s.get("final_url"))):
+                try:
+                    age = now - datetime.fromisoformat(s["retrieved_at"])
+                except (KeyError, ValueError):
+                    continue
+                if age.days <= max_age_days:
+                    return s
+        return None
+
+    def records_for_urls(self, urls: Iterable[str]) -> List[Dict[str, Any]]:
+        """Non-rejected records collected from these (final) URLs."""
+        want = {_norm_url(u) for u in urls}
+        return [r for r in self.records() if r["quality"]["validation_status"] != "rejected"
+                and _norm_url(r["source"].get("final_url") or r["source"].get("url")) in want]
+
     def add_source(self, source: Dict[str, Any]) -> None:
         _write(self.sources_file, self.sources() + [source])
 

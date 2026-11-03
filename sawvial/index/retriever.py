@@ -28,6 +28,11 @@ log = logging.getLogger("sawvial.retriever")
 
 REBUILD_HINT = "python build_dataset.py --skip-build --build-index"
 
+
+class IndexRebuildNeeded(RuntimeError):
+    """The on-disk index is missing, incomplete, from an old format or an incompatible scikit-learn version.
+    ensure_index_bundle() repairs this automatically."""
+
 # ---- agricultural vocabulary -------------------------------------------------
 # canonical crop name (as used in dataset context.crop) -> surface forms
 CROP_SYNONYMS: Dict[str, List[str]] = {
@@ -103,17 +108,31 @@ def load_index_bundle(index_dir: str | Path, dataset_dir: str | Path,
     idx, ds = Path(index_dir), Path(dataset_dir)
     meta_file = idx / "index_metadata.json"
     if not meta_file.exists():
-        raise FileNotFoundError(f"No index at {idx}. Build it with: {REBUILD_HINT}")
+        raise IndexRebuildNeeded(f"No index at {idx}. Build it with: {REBUILD_HINT}")
     meta = json.loads(meta_file.read_text(encoding="utf-8"))
     if meta.get("format_version") != FORMAT_VERSION:
-        raise RuntimeError(f"Index at {idx} uses an old format (no format_version={FORMAT_VERSION}). "
-                           f"Rebuild it with: {REBUILD_HINT}")
+        raise IndexRebuildNeeded(f"Index at {idx} uses an old format (no format_version={FORMAT_VERSION}). "
+                                 f"Rebuild it with: {REBUILD_HINT}")
 
+    missing_files = [n for n in ("id_map.json", "lexical_vectorizer.joblib", "lexical_matrix.npz")
+                     if not (idx / n).exists()]
+    if missing_files:
+        raise IndexRebuildNeeded(f"Index at {idx} is incomplete (missing {', '.join(missing_files)}; the large index "
+                           f"files are not stored in git). Rebuild it with: {REBUILD_HINT}")
+    import sklearn
+    built_with = meta.get("sklearn_version")
+    if built_with and built_with != sklearn.__version__:
+        raise IndexRebuildNeeded(f"Index at {idx} was built with scikit-learn {built_with}, this is {sklearn.__version__}. "
+                                 f"Rebuild it with: {REBUILD_HINT}")
     ids = json.loads((idx / "id_map.json").read_text(encoding="utf-8"))
-    vectorizer = joblib.load(idx / "lexical_vectorizer.joblib")
+    try:
+        vectorizer = joblib.load(idx / "lexical_vectorizer.joblib")
+    except Exception as exc:                                  # corrupt / incompatible pickle
+        raise IndexRebuildNeeded(f"Index vectorizer at {idx} cannot be read ({exc.__class__.__name__}). "
+                                 f"Rebuild it with: {REBUILD_HINT}") from exc
     matrix = sp.load_npz(idx / "lexical_matrix.npz").tocsr()
     if matrix.shape[0] != len(ids):
-        raise RuntimeError(f"Corrupt index at {idx} (rows != ids). Rebuild with: {REBUILD_HINT}")
+        raise IndexRebuildNeeded(f"Corrupt index at {idx} (rows != ids). Rebuild with: {REBUILD_HINT}")
 
     ds_file = ds / "knowledge_units.jsonl"
     wanted = set(ids)
@@ -168,6 +187,49 @@ def _crops_in_text(bundle: Dict[str, Any]) -> List[set]:
             rows.append({c for c, pat in _ALL_CROP_PATTERNS.items() if pat.search(text)})
         bundle["_text_crops"] = rows
     return bundle["_text_crops"]
+
+
+def ensure_index_bundle(index_dir: str | Path, dataset_dir: str | Path, load_dense_model: bool = True) -> Dict[str, Any]:
+    """Load the index; if it is missing, incomplete, old, built with another scikit-learn, or STALE (the dataset changed),
+    rebuild it from the dataset automatically (lexical, ~15 s) and load the fresh one. No manual command needed."""
+    from sawvial.index.faiss_builder import build_index
+    ds_file = Path(dataset_dir) / "knowledge_units.jsonl"
+    bundle, reason = None, None
+    try:
+        bundle = load_index_bundle(index_dir, dataset_dir, load_dense_model)
+        if bundle["stale"]:
+            reason = "the dataset changed since the index was built"
+    except IndexRebuildNeeded as exc:
+        reason = str(exc).split(" Rebuild", 1)[0].split(" Build it", 1)[0]
+    if reason is None:
+        return bundle
+    if not ds_file.exists():
+        raise RuntimeError(f"The index needs rebuilding ({reason}) but {ds_file} does not exist.")
+    log.warning("Rebuilding the search index automatically: %s", reason)
+    with open(ds_file, encoding="utf-8") as f:
+        units = [json.loads(line) for line in f if line.strip()]
+    build_index(units, index_dir, dataset_file=ds_file)
+    return load_index_bundle(index_dir, dataset_dir, load_dense_model)
+
+
+def bundle_from_units(units: List[Dict[str, Any]], statuses: frozenset, origin: str = "web") -> Optional[Dict[str, Any]]:
+    """Small in-memory index over freshly collected records, with the SAME structure as the on-disk bundle,
+    so crop gating, synonyms and passage building are shared with local retrieval. Only records that pass the
+    normal eligibility rules (usable evidence, no flags, ...) for the given statuses are included.
+    Returns None when nothing is eligible."""
+    from sawvial.eligibility import is_answerable
+    from sawvial.embeddings.embedder import make_tfidf_vectorizer
+    eligible = [u for u in units if is_answerable(u, statuses)]
+    if not eligible:
+        return None
+    vec = make_tfidf_vectorizer(max_features=None)
+    matrix = vec.fit_transform([u["retrieval"]["semantic_text"] for u in eligible]).tocsr().astype(np.float32)
+    crops = {str(c).strip().lower() for u in eligible for c in u.get("context", {}).get("crop", [])
+             if isinstance(c, str) and c.strip()}
+    return {"ids": [u["id"] for u in eligible], "vectorizer": vec, "matrix": matrix,
+            "units_by_id": {u["id"]: u for u in eligible}, "index_meta": {"n_units": len(eligible), "memory": True},
+            "stale": False, "crop_names": crops, "dense_index": None, "dense_embedder": None,
+            "_crop_masks": {}, "origin": origin}
 
 
 def warm_up(bundle: Dict[str, Any]) -> None:

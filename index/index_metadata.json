@@ -1,6 +1,6 @@
 {
   "format_version": 2,
-  "built_at": "2026-10-26T05:07:30.437975+00:00",
+  "built_at": "2026-10-29T12:57:28.553972+00:00",
   "n_units": 5568,
   "answerable_statuses": [
     "validated",
@@ -10,8 +10,9 @@
   "indexed_status_counts": {
     "validated": 5568
   },
-  "dataset_file": "dataset\\knowledge_units.jsonl",
-  "dataset_sha256": "48c4b59f8c936ae94aff2ced2421dbdc14ebec70cbf3d5fb1f5a26b5338218f1",
+  "dataset_file": "C:\\Users\\KUNAL DEBNATH\\Desktop\\sawvial_project\\dataset\\knowledge_units.jsonl",
+  "dataset_sha256": "99d617b3438126527a503df962eacddd5f5e904e823cb2e7e4ee76d145656245",
+  "sklearn_version": "1.7.2",
   "lexical": {
     "type": "tfidf(1,2)-sparse-cosine",
     "n_features": 259151

@@ -11,7 +11,9 @@ Open http://localhost:8000 (serves sawvial/*.html).  API docs: http://localhost:
 """
 import argparse
 import collections
+import json
 import logging
+import queue
 import re
 import sys
 import threading
@@ -35,7 +37,9 @@ from pydantic import BaseModel, Field
 from sawvial import grounding, settings
 from sawvial.eligibility import ANSWERABLE_STATUSES
 from sawvial.index.passages import retrieve_passages
-from sawvial.model_config import ModelConfigError
+from sawvial.language import NLLB, detect_input_language, norm_lang
+from sawvial.model_config import ModelConfigError, hf_cached
+from sawvial.research.compare import compare_passages
 
 log = logging.getLogger("sawvial.api")
 
@@ -63,6 +67,17 @@ NO_CROP_EVIDENCE = (
     "to answer this reliably. I will not substitute general advice for a crop-specific "
     "recommendation. You can add research on this crop (see the README) or ask about "
     "crops, soil or water topics that the dataset covers.")
+# shown only AFTER online research was attempted (or is switched off)
+RESEARCH_MESSAGES = {
+    "search_failed": ("The local knowledge base has no reliable evidence for this, and the online search could not be "
+                      "completed ({error}). I will not guess. Check the internet connection / search settings, or try again later."),
+    "no_results": "The local knowledge base has no reliable evidence for this, and the online search found no matching documents.",
+    "no_usable_documents": ("The local knowledge base has no reliable evidence for this. I found online documents but could not "
+                            "use any of them (inaccessible, too short, not from trusted sources, or not in English)."),
+    "no_relevant_passages": ("The local knowledge base has no reliable evidence for this. I read {n} online document(s) but "
+                             "none contained passages that answer the question."),
+    "disabled": "Online research is switched off and the local knowledge base has no reliable evidence for this question.",
+}
 
 AGRICULTURE_TERMS = re.compile(
     r"\b(agricultur\w*|agronom\w*|farm(?:s|ing)?|crop(?:s|ping)?|potato(?:es)?|"
@@ -92,20 +107,7 @@ FOLLOW_UP_WORDS = re.compile(
     r"one line|single line|short(?:er)?|brief(?:ly)?|concise|"
     r"summarize|summarise|bullet points?)\b", re.I)
 
-NLLB = {"en": "eng_Latn", "bn": "ben_Beng", "hi": "hin_Deva", "as": "asm_Beng",
-        "ta": "tam_Taml", "te": "tel_Telu", "mr": "mar_Deva", "ml": "mal_Mlym",
-        "kn": "kan_Knda", "gu": "guj_Gujr", "pa": "pan_Guru", "or": "ory_Orya",
-        "ur": "urd_Arab", "ne": "npi_Deva"}
-NAMES = {"english": "en", "bengali": "bn", "bangla": "bn", "hindi": "hi", "assamese": "as",
-         "tamil": "ta", "telugu": "te", "marathi": "mr", "malayalam": "ml", "kannada": "kn",
-         "gujarati": "gu", "punjabi": "pa", "odia": "or", "oriya": "or", "urdu": "ur", "nepali": "ne"}
 SPEECH_LANGS = Literal["bn", "mr", "en", "hi", "ta", "te", "kn"]
-
-
-def norm_lang(x: Optional[str]) -> str:
-    x = (x or "en").strip().lower()
-    x = NAMES.get(x, x.replace("_", "-").split("-")[0])
-    return x if x in NLLB else "en"
 
 
 def split_chunks(text: str, limit: int = 350) -> List[str]:
@@ -147,7 +149,28 @@ def source_entry(p: dict, cited: bool) -> dict:
             "url": safe_http_url(p.get("url")), "page": p.get("page"),
             "section": p.get("section"), "status": p.get("status"),
             "score": round(float(p["score"]), 4), "cited": cited,
+            "origin": p.get("origin", "local"),                       # local knowledge base | live web source
+            "source_type": p.get("source_type") or "research_paper",  # official_guidance | research_paper | informational_article
+            "trust_tier": p.get("trust_tier"), "retrieved_at": p.get("retrieved_at"),
+            "published": p.get("published"),
             "snippet": (p.get("text") or "")[:300]}
+
+
+def sources_for(passages: list, cited_ids: set) -> list:
+    """One entry per source DOCUMENT (several passages of one paper/page are merged). The entry is the cited
+    passage if any was cited, otherwise the best-ranked one; `ids` lists every passage used and `pages` their pages."""
+    groups: dict = {}
+    for p in passages:
+        groups.setdefault(p.get("document_id") or p["id"], []).append(p)
+    out = []
+    for group in groups.values():
+        cited = [p for p in group if p["id"] in cited_ids]
+        entry = source_entry((cited or group)[0], bool(cited))
+        entry["ids"] = [p["id"] for p in group]
+        entry["pages"] = sorted({p["page"] for p in group if p.get("page")})
+        out.append(entry)
+    out.sort(key=lambda e: not e["cited"])               # cited sources first (stable otherwise)
+    return out
 
 
 # ---------------------------------------------------------------- question analysis
@@ -193,7 +216,7 @@ class Translator:
         import torch
         from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
         self.torch = torch
-        self.dev = "cuda" if torch.cuda.is_available() else "cpu"
+        self.dev = (STATE.get("llm_status") or {}).get("device", {}).get("device") or ("cuda" if torch.cuda.is_available() else "cpu")
         local = settings.OFFLINE
         self.tok = AutoTokenizer.from_pretrained(name, local_files_only=local)
         self.model = AutoModelForSeq2SeqLM.from_pretrained(
@@ -239,8 +262,8 @@ def load_all() -> None:
     try:
         import rag_chat as rag
     except ImportError as exc:
-        raise ModelConfigError(f"Model libraries are missing ({exc}). Install them with: "
-                               "pip install -r requirements-llm.txt   (or use --mock for UI testing)") from exc
+        raise ModelConfigError(f"Model libraries are missing ({exc}). Install them with the setup lines in README.md "
+                               "(CUDA PyTorch first, then requirements-llm.txt), or use --mock for UI testing") from exc
     STATE["rag"] = rag
     log.info("Loading retriever ...")
     STATE["bundle"], STATE["embedder"] = rag.load_retriever(CFG["index_dir"], CFG["dataset_dir"])
@@ -252,17 +275,33 @@ def load_all() -> None:
         require_adapter=CFG["require_adapter"], four_bit=CFG["four_bit"]))
     STATE["translator"], STATE["translator_error"] = None, None
     if CFG["translate"]:
-        log.info("Loading translator ...")
-        try:
-            STATE["translator"] = Translator(CFG["translator_model"])
-        except Exception as exc:                       # missing model must not stop English use
-            STATE["translator_error"] = (
-                f"{exc.__class__.__name__}: translation model {CFG['translator_model']} is unavailable "
-                f"(run `python tools/download_models.py`). Non-English questions will be answered "
-                f"in English only.")
-            log.warning(STATE["translator_error"])
+        STATE["translator_error"] = load_translator()
     STATE["loaded"] = True
     log.info("Ready.")
+
+
+def load_translator() -> Optional[str]:
+    """Load + self-test the NLLB translator. Returns None on success or an actionable error message."""
+    name = CFG["translator_model"]
+    if settings.OFFLINE and not hf_cached(name):
+        msg = (f"Translation model {name} is not in the local cache. Download it once with: "
+               f"python tools/download_models.py --only translator   (or set SAWVIAL_OFFLINE=0 to allow download)")
+        log.warning(msg)
+        return msg
+    log.info("Loading translator ...")
+    try:
+        tr = Translator(name)
+        probe = tr.translate("Soil moisture", NLLB["en"], NLLB["ta"])           # en -> ta must really work
+        if not probe or not probe.strip():
+            raise RuntimeError("self-test translation returned nothing")
+        STATE["translator"] = tr
+        return None
+    except Exception as exc:                          # a broken translator must not stop English use
+        msg = (f"Translation model {name} could not be loaded ({exc.__class__.__name__}: {exc}). "
+               f"Reinstall with: .\\.venv\\Scripts\\python.exe -m pip install -r requirements-llm.txt (needs sentencepiece, protobuf, transformers<5) "
+               f"and re-download with: python tools/download_models.py --only translator")
+        log.warning(msg)
+        return msg
 
 
 @asynccontextmanager
@@ -321,7 +360,10 @@ class AskIn(BaseModel):
     question: Optional[str] = Field(None, max_length=settings.MAX_QUESTION_CHARS + 200)
     query: Optional[str] = Field(None, max_length=settings.MAX_QUESTION_CHARS + 200)   # aliases
     message: Optional[str] = Field(None, max_length=settings.MAX_QUESTION_CHARS + 200)
-    language: Optional[str] = Field("en", max_length=20)
+    language: Optional[str] = Field("en", max_length=20)          # legacy alias of answer_language (the UI language)
+    answer_language: Optional[str] = Field(None, max_length=20)   # language the REPLY should be in
+    input_language: Optional[str] = Field(None, max_length=20)    # language the QUESTION is in ("auto"/None = detect)
+    research: Literal["auto", "always", "never"] = "auto"         # online research: when local evidence is insufficient / always / never
     top_k: Optional[int] = Field(None, ge=1, le=8)
     history: Optional[List[ChatTurn]] = Field(None, max_length=48)
     request_id: Optional[str] = Field(None, max_length=120)
@@ -381,7 +423,7 @@ def speech(body: SpeechIn):
             log.error("Speech stream %s failed: %s", request_id, exc)
             raise
         finally:
-            if chunks is not None:
+            if chunks is not None and hasattr(chunks, "close"):
                 chunks.close()
             with CANCEL_EVENTS_LOCK:
                 CANCEL_EVENTS.pop(request_id, None)
@@ -392,6 +434,10 @@ def speech(body: SpeechIn):
 
 
 # ---------------------------------------------------------------- the answer pipeline
+def _noop(*_a, **_k):
+    return None
+
+
 def _history_turns(history) -> list:
     turns, total = [], 0
     for turn in reversed(history or []):
@@ -405,77 +451,177 @@ def _history_turns(history) -> list:
     return turns
 
 
-def run_ask(question: str, lang: str, top_k: int, history=None, cancel_event=None) -> dict:
+class Translation:
+    """Per-request translation helper that keeps an honest record of what really happened."""
+    def __init__(self, answer_lang: str, timings: dict):
+        self.tr, self.answer_lang, self.timings = STATE.get("translator"), answer_lang, timings
+        self.input = "not_needed"      # not_needed | ok | unavailable | failed
+        self.output = "not_needed"
+        self.warnings: List[str] = []
+
+    def _run(self, text: str, src: str, tgt: str, key: str) -> tuple:
+        if not self.tr:
+            return text, "unavailable"
+        out, ok = safe_translate(self.tr, text, NLLB[src], NLLB[tgt], self.timings, key)
+        return (out, "ok") if ok else (text, "failed")
+
+    def to_english(self, text: str, src: str) -> tuple:
+        if src == "en":
+            return text, "not_needed"
+        return self._run(text, src, "en", "translate_in")
+
+    def from_english(self, text_en: str) -> tuple:
+        """-> (text, text_language). text_language is 'en' when the reply could NOT be translated."""
+        if self.answer_lang == "en":
+            return text_en, "en"
+        out, status = self._run(text_en, "en", self.answer_lang, "translate_out")
+        self.output = status
+        if status != "ok":
+            self.warnings.append("translation_unavailable" if status == "unavailable" else "translation_failed")
+            return text_en, "en"
+        return out, self.answer_lang
+
+    def meta(self) -> dict:
+        return {"input": self.input, "output": self.output, "available": bool(self.tr)}
+
+
+def _research_summary(report: Optional[dict], comparison: Optional[dict] = None) -> dict:
+    if not report:
+        return {"status": "not_needed", "attempted": False}
+    docs = [{k: d.get(k) for k in ("url", "title", "status", "tier", "source_type", "reason")}
+            for d in report.get("documents", [])][:12]
+    out = {"status": report.get("status"), "attempted": report.get("attempted", True), "error": report.get("error"),
+           "candidates": report.get("candidates", 0), "documents": docs,
+           "providers": [{k: p.get(k) for k in ("provider", "status", "results", "error")} for p in report.get("providers", [])]}
+    if comparison:
+        out["comparison"] = comparison
+    return out
+
+
+def run_ask(question: str, lang: str, top_k: int, history=None, cancel_event=None, *,
+            input_hint: Optional[str] = None, progress=None, research: str = "auto") -> dict:
+    """Pipeline: language handling -> LOCAL retrieval -> relevance check -> ONLINE research if needed ->
+    grounded answer -> translation. `lang` is the language the user wants the ANSWER in; the language the
+    QUESTION is written in is detected separately (or given via input_hint)."""
     t0 = time.time()
     timings: dict = {}
+    progress = progress or _noop
+    input_lang = detect_input_language(question, input_hint, selected=lang)
+    tl = Translation(lang, timings)
+    meta = {"input_language": input_lang, "answer_language": lang, "language": lang}
 
     def finish(res: dict) -> dict:
         timings["total"] = int((time.time() - t0) * 1000)
+        res.update(meta)
+        res.setdefault("translation", tl.meta())
+        res["warnings"] = list(dict.fromkeys(tl.warnings + res.get("warnings", [])))
         res["latency_ms"] = timings["total"]
         res["timings_ms"] = dict(timings)
-        log.info("ask lang=%s grounding=%s timings=%s", lang, res.get("grounding", {}).get("status"), timings)
+        if res["text_language"] != lang and "translation_unavailable" not in res["warnings"] \
+                and "translation_failed" not in res["warnings"]:
+            res["warnings"].append("translation_unavailable")      # never present English as the requested language
+        log.info("ask in=%s ans=%s text=%s grounding=%s research=%s timings=%s", input_lang, lang, res["text_language"],
+                 res.get("grounding", {}).get("status"), res.get("research", {}).get("status"), timings)
         return res
 
+    def direct(text_en: str, status: str, rep: Optional[dict] = None, **extra) -> dict:
+        """Every early return (greeting, out of scope, no evidence, cancelled, ...) goes through here, so the
+        language metadata and the translation are always consistent."""
+        progress("translating") if lang != "en" else None
+        text, text_lang = tl.from_english(text_en)
+        return finish({"answer": text, "text_language": text_lang, "grounded": False, "sources": [],
+                       "grounding": {"status": status, **extra}, "research": _research_summary(rep),
+                       "evidence_origin": "none"})
+
     if CFG["mock"]:
-        ans = "এটি একটি পরীক্ষামূলক উত্তর।" if lang == "bn" else "This is a mock answer for frontend testing."
-        return finish({"answer": ans, "language": lang, "answer_language": lang, "grounded": True,
-                       "mock": True, "grounding": {"status": "mock"},
-                       "sources": [{"id": "SWM_000000", "title": "Mock source", "authors": ["A. Author"],
-                                    "year": 2024, "journal": "Mock Journal", "doi": "10.1000/mock",
-                                    "doi_url": "https://doi.org/10.1000/mock", "url": None, "page": 1,
-                                    "score": 1.0, "cited": True, "snippet": "Mock evidence text."}]})
+        mock_ans = "এটি একটি পরীক্ষামূলক উত্তর।" if lang == "bn" else "This is a mock answer for frontend testing."
+        tl.output = "ok" if lang in ("bn", "en") else "unavailable"
+        if lang not in ("bn", "en"):
+            tl.warnings.append("translation_unavailable")
+        return finish({"answer": mock_ans if lang in ("bn", "en") else "This is a mock answer for frontend testing.",
+                       "text_language": lang if lang in ("bn", "en") else "en", "grounded": True, "mock": True,
+                       "grounding": {"status": "mock"}, "research": {"status": "not_needed", "attempted": False},
+                       "evidence_origin": "local",
+                       "sources": [{"id": "SWM_000000", "title": "Mock source", "authors": ["A. Author"], "year": 2024,
+                                    "journal": "Mock Journal", "doi": "10.1000/mock", "doi_url": "https://doi.org/10.1000/mock",
+                                    "url": None, "page": 1, "score": 1.0, "cited": True, "origin": "local",
+                                    "source_type": "research_paper", "snippet": "Mock evidence text."}]})
 
-    rag, tr, bundle = STATE["rag"], STATE.get("translator"), STATE["bundle"]
+    rag, bundle = STATE["rag"], STATE["bundle"]
     prior = _history_turns(history)
-    q_en, translated_in, translation_ok = question, False, True
-    if lang != "en":
-        if tr:
-            q_en, translation_ok = safe_translate(tr, question, NLLB[lang], "eng_Latn", timings, "translate_in")
-            translated_in = translation_ok
-            if translation_ok:
-                prior = [{"role": t["role"],
-                          "content": safe_translate(tr, t["content"], NLLB[lang], "eng_Latn", timings, "translate_in")[0]}
-                         for t in prior]
-        else:
-            translation_ok = False
 
-    def direct(text_en: str, status: str, **extra) -> dict:
-        out, ok = (text_en, True) if lang == "en" else safe_translate(tr, text_en, "eng_Latn", NLLB[lang],
-                                                                      timings, "translate_out")
-        res = {"answer": out, "language": lang, "answer_language": lang if (lang == "en" or ok) else "en",
-               "grounded": False, "sources": [], "grounding": {"status": status, **extra}}
-        if lang != "en" and not ok:
-            res["note"] = "translation_unavailable"
-        return finish(res)
+    # ---- 1. language: translate the QUESTION from its own language (not from the answer language)
+    q_en = question
+    if input_lang != "en":
+        progress("translating_in")
+        q_en, tl.input = tl.to_english(question, input_lang)
+        if tl.input != "ok":
+            tl.warnings.append("input_translation_unavailable")
+            return direct("I could not translate your question because the translation model is not available. "
+                          "Please ask in English, or see /api/health for how to install the translator.",
+                          "translation_unavailable")
+        prior = [{"role": t["role"],
+                  "content": tl.to_english(t["content"], detect_input_language(t["content"], None, lang))[0]}
+                 for t in prior]
+    else:
+        prior = [{"role": t["role"],
+                  "content": (tl.to_english(t["content"], d)[0] if (d := detect_input_language(t["content"], None, lang)) != "en" else t["content"])}
+                 for t in prior]
 
     if GREETING.fullmatch(q_en.strip()):
         return direct("Hello! I can help with questions about crops, soil, irrigation, water use, and "
-                      "soil/water conservation in this research dataset.", "not_applicable")
-
+                      "soil/water conservation, using a research knowledge base and online sources.", "not_applicable")
     previous_question = find_anchor_question(prior, bundle)
     follow_up = bool(previous_question) and (is_follow_up(q_en) or is_formatting_request(q_en))
     if not is_agriculture_question(q_en, bundle) and not follow_up:
         return direct(OUT_OF_SCOPE_ANSWER, "not_applicable", reason="out_of_scope")
-
     retrieval_query = f"{previous_question} {q_en}" if follow_up else q_en
+
+    # ---- 2. LOCAL knowledge base first
+    progress("local_search")
     t1 = time.time()
-    found = retrieve_passages(bundle, retrieval_query, top_k, STATE.get("embedder"))
+    local = retrieve_passages(bundle, retrieval_query, top_k, STATE.get("embedder"))
     timings["retrieval"] = int((time.time() - t1) * 1000)
-    passages = found["passages"]
+    local_ok = (not local["crop_missing"] and bool(local["passages"])
+                and max(float(p["score"]) for p in local["passages"]) >= settings.MIN_RETRIEVAL_SCORE)
+    passages, found, research_report = (local["passages"] if local_ok else []), local, None
+    if cancel_event is not None and cancel_event.is_set():
+        return direct("Stopped.", "cancelled")
 
-    if found["crop_missing"]:
-        return direct(NO_CROP_EVIDENCE.format(crops=", ".join(found["crops"])), "insufficient_evidence",
-                      reason="no_crop_evidence", crops=found["crops"])
-    if not passages or max(float(p["score"]) for p in passages) < settings.MIN_RETRIEVAL_SCORE:
-        return direct(NO_DATA_ANSWER, "insufficient_evidence", reason="no_relevant_evidence")
+    # ---- 3. ONLINE research when the local evidence is not enough (or when the user asks for it)
+    want_online = research == "always" or (research == "auto" and not local_ok)
+    if want_online and research != "never":
+        from sawvial.research.live import live_research
+        t_r = time.time()
+        live = live_research(retrieval_query, top_k, progress=progress, cancel_event=cancel_event)
+        timings["research"] = int((time.time() - t_r) * 1000)
+        research_report = live["report"]
+        if live["passages"]:
+            passages = (passages[:max(1, top_k // 2)] if research == "always" else []) + live["passages"]
+            passages = passages[:top_k]
+            found = live
+        if cancel_event is not None and cancel_event.is_set():
+            return direct("Stopped.", "cancelled", research_report)
 
+    if not passages:
+        st = (research_report or {}).get("status") if (research_report or {}).get("attempted") else None
+        if st in RESEARCH_MESSAGES:
+            msg = RESEARCH_MESSAGES[st].format(error=(research_report or {}).get("error", ""), n=len((research_report or {}).get("documents", [])))
+            return direct(msg, "insufficient_evidence", research_report, reason=f"research_{st}")
+        if local["crop_missing"]:
+            return direct(NO_CROP_EVIDENCE.format(crops=", ".join(local["crops"])), "insufficient_evidence",
+                          research_report, reason="no_crop_evidence", crops=local["crops"])
+        return direct(NO_DATA_ANSWER, "insufficient_evidence", research_report, reason="no_relevant_evidence")
+
+    # ---- 4. generate + verify
+    progress("generating")
     t2 = time.time()
     with INFER_LOCK:
         raw = rag.answer(STATE["tok"], STATE["model"], q_en, passages, CFG["max_new_tokens"],
                          history=prior if follow_up else [], cancel_event=cancel_event) or ""
     timings["generation"] = int((time.time() - t2) * 1000)
     if cancel_event is not None and cancel_event.is_set():
-        return direct("Stopped.", "cancelled")
+        return direct("Stopped.", "cancelled", research_report)
 
     t3 = time.time()
     report = grounding.assess(raw, passages)
@@ -484,38 +630,58 @@ def run_ask(question: str, lang: str, top_k: int, history=None, cancel_event=Non
     if text:
         status = "supported" if not removed and not report["invalid_citations"] else "partially_supported"
     else:
-        fallback = grounding.extractive_answer(q_en, passages)
-        if not fallback:
-            timings["grounding"] = int((time.time() - t3) * 1000)
-            return direct(NO_DATA_ANSWER, "insufficient_evidence", reason="model_output_not_supported",
-                          invalid_citations=report["invalid_citations"])
-        text, best = fallback
-        cited_ids, status = [best["id"]], "extractive_fallback"
+        fb = grounding.extractive_answer(q_en, passages)
+        if fb:
+            text, best = fb
+            cited_ids, status = [best["id"]], "extractive_fallback"
+        else:
+            ex = grounding.excerpt_answer(passages)          # last resort: a verbatim, relevant excerpt (never invented)
+            if ex is None:
+                timings["grounding"] = int((time.time() - t3) * 1000)
+                return direct(NO_DATA_ANSWER, "insufficient_evidence", research_report,
+                              reason="model_output_not_supported", invalid_citations=report["invalid_citations"])
+            text, best = ex
+            cited_ids, status = [best["id"]], "excerpt_only"
     timings["grounding"] = int((time.time() - t3) * 1000)
 
+    # ---- 5. compare sources, state uncertainty
+    cited_set = set(cited_ids)
+    comparison = compare_passages(passages)         # ALL evidence shown, so disagreements are not hidden by what the model cited
     level = grounding.evidence_level(cited_ids, passages)
+    origins = {p.get("origin", "local") for p in passages if p["id"] in cited_set}
     notes = [n for n, cond in (("single_source", level == "single_source"),
                                ("partially_supported", status == "partially_supported"),
-                               ("extractive_fallback", status == "extractive_fallback")) if cond]
-    out_text, ok = (text, True) if lang == "en" else safe_translate(tr, text, "eng_Latn", NLLB[lang],
-                                                                    timings, "translate_out")
-    res = {"answer": out_text, "language": lang,
-           "answer_language": lang if (lang == "en" or ok) else "en",
-           "grounded": True,
+                               ("extractive_fallback", status in ("extractive_fallback", "excerpt_only")),
+                               ("web_unreviewed", "web" in origins),
+                               ("differing_values", bool(comparison["differences"]))) if cond]
+    progress("translating") if lang != "en" else None
+    out_text, text_lang = tl.from_english(text)
+    res = {"answer": out_text, "text_language": text_lang, "grounded": True,
            "grounding": {"status": status, "claims": report["n_claims"], "supported_claims": report["n_supported"],
                          "removed_unsupported": removed, "invalid_citations": report["invalid_citations"],
                          "evidence_level": level, "notes": notes},
-           "sources": [source_entry(p, p["id"] in set(cited_ids)) for p in passages]}
-    if translated_in:
+           "evidence_origin": "web" if origins == {"web"} else ("local+web" if "web" in origins else "local"),
+           "research": _research_summary(research_report, comparison),
+           "sources": sources_for(passages, cited_set)}
+    if input_lang != "en":
         res["question_en"] = q_en
     if lang != "en":
         res["answer_en"] = text
-        if not ok:
-            res["note"] = "translation_unavailable"
     return finish(res)
 
 
 # ---------------------------------------------------------------- endpoints
+def _device_report(llm: dict) -> dict:
+    dev = dict(llm.get("device") or {})
+    torch = sys.modules.get("torch")                  # only report live VRAM if torch is already loaded
+    if torch is not None and dev.get("device") == "cuda":
+        try:
+            dev["vram_used_mb"] = int(torch.cuda.memory_allocated() // (1024 * 1024))
+        except Exception:                             # noqa: BLE001
+            pass
+    return dev
+
+
 @app.get("/api/health")
 def health():
     llm = STATE.get("llm_status") or {}
@@ -529,16 +695,19 @@ def health():
     return {"status": "ok", "mock": CFG["mock"],
             "translator": bool(STATE.get("translator")),
             "translator_error": STATE.get("translator_error"),
+            "translator_model": CFG["translator_model"], "translator_model_cached": hf_cached(CFG["translator_model"]),
             "llm": {"mode": llm.get("mode"), "adapter_status": llm.get("adapter_status"),
                     "message": llm.get("message"), "base_model": llm.get("base_model")},
             "index": {"n_units": meta.get("n_units"), "built_at": meta.get("built_at"),
                       "stale": bundle.get("stale"), "dense": bool(bundle.get("dense_index"))},
+            "device": _device_report(llm),
+            "research": {"enabled": settings.ONLINE_RESEARCH, "search_provider": settings.SEARCH_PROVIDER,
+                         "min_trust": settings.RESEARCH_MIN_TRUST, "max_docs": settings.RESEARCH_MAX_DOCS},
             "answerable_statuses": sorted(ANSWERABLE_STATUSES),
             "speech_local": speech_local}
 
 
-@app.post("/api/ask", dependencies=[Depends(rate_limit)])
-def ask(body: AskIn):
+def _validated_question(body: "AskIn") -> str:
     q = (body.question or body.query or body.message or "").strip()
     if not q:
         raise HTTPException(400, "question is required")
@@ -546,13 +715,24 @@ def ask(body: AskIn):
         raise HTTPException(400, f"question too long (max {settings.MAX_QUESTION_CHARS} characters)")
     if not CFG["mock"] and not STATE.get("loaded"):
         raise HTTPException(503, "The assistant is still starting up; please retry in a moment.")
+    return q
+
+
+def _answer_lang(body: "AskIn") -> str:
+    """The reply language: `answer_language` if given, else the legacy `language` field (the UI language)."""
+    return norm_lang(body.answer_language or body.language)
+
+
+@app.post("/api/ask", dependencies=[Depends(rate_limit)])
+def ask(body: AskIn):
+    q = _validated_question(body)
     request_id = body.request_id or f"ask-{time.time_ns()}"
     cancel_event = threading.Event()
     with CANCEL_EVENTS_LOCK:
         CANCEL_EVENTS[request_id] = cancel_event
     try:
-        return run_ask(q, norm_lang(body.language), body.top_k or CFG["top_k"],
-                       history=body.history, cancel_event=cancel_event)
+        return run_ask(q, _answer_lang(body), body.top_k or CFG["top_k"], history=body.history,
+                       cancel_event=cancel_event, input_hint=body.input_language, research=body.research)
     except HTTPException:
         raise
     except Exception:
@@ -561,6 +741,49 @@ def ask(body: AskIn):
     finally:
         with CANCEL_EVENTS_LOCK:
             CANCEL_EVENTS.pop(request_id, None)
+
+
+@app.post("/api/ask/stream", dependencies=[Depends(rate_limit)])
+def ask_stream(body: AskIn):
+    """Same pipeline as /api/ask, streamed as NDJSON: {"stage": ...} lines while it works (local_search,
+    online_search, reading, generating, translating...), then one {"final": {...}} (or {"error": {...}}) line."""
+    q = _validated_question(body)
+    request_id = body.request_id or f"ask-{time.time_ns()}"
+    cancel_event = threading.Event()
+    with CANCEL_EVENTS_LOCK:
+        CANCEL_EVENTS[request_id] = cancel_event
+    events: "queue.Queue" = queue.Queue()
+    lang, top_k = _answer_lang(body), body.top_k or CFG["top_k"]
+
+    def worker():
+        try:
+            res = run_ask(q, lang, top_k, history=body.history, cancel_event=cancel_event,
+                          input_hint=body.input_language, research=body.research,
+                          progress=lambda stage, **info: events.put({"stage": stage, **info}))
+            events.put({"final": res})
+        except Exception:
+            log.exception("ask failed")
+            events.put({"error": {"status": 500, "detail": "Internal error while answering. Details are in the server log."}})
+        finally:
+            events.put(None)
+
+    def stream():
+        threading.Thread(target=worker, daemon=True).start()
+        done = False
+        try:
+            while True:
+                ev = events.get()
+                if ev is None:
+                    done = True
+                    break
+                yield json.dumps(ev, ensure_ascii=False) + "\n"
+        finally:
+            if not done:
+                cancel_event.set()                      # client went away: stop research/generation
+            with CANCEL_EVENTS_LOCK:
+                CANCEL_EVENTS.pop(request_id, None)
+
+    return StreamingResponse(stream(), media_type="application/x-ndjson", headers={"Cache-Control": "no-store"})
 
 
 # ---- serve the frontend (only html pages + css/js/assets, NOT the python package) ----

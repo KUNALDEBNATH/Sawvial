@@ -29,7 +29,7 @@ def main():
     try:
         from huggingface_hub import snapshot_download
     except ImportError:
-        sys.exit("huggingface_hub is missing. Run: pip install -r requirements-llm.txt")
+        sys.exit("huggingface_hub is missing. Run the install lines from README.md first (CUDA PyTorch, then requirements-llm.txt).")
     from speech import MODEL_IDS
 
     jobs = []
@@ -48,6 +48,9 @@ def main():
             print(f"   FAILED: {exc}")
             failed.append(repo)
     chk = inspect_adapter(settings.ADAPTER_DIR, settings.BASE_MODEL)
+    from sawvial.model_config import hf_cached
+    print(f"\ntranslator cached: {hf_cached(settings.TRANSLATOR_MODEL)}   " +
+          "   ".join(f"voice[{c}]: {hf_cached(m)}" for c, m in MODEL_IDS.items()))
     print(f"\nLoRA adapter ({settings.ADAPTER_DIR}): {chk.status}" + ("" if chk.ok else f" - {chk.message()}"))
     if failed:
         sys.exit(f"\nDownload failed for: {', '.join(failed)}. Check your internet connection and retry.")

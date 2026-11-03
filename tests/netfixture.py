@@ -10,12 +10,14 @@ import pytest
 from sawvial.research import safe_http
 
 ROUTES = {}      # path -> (status, headers, body)
+SEEN = {}        # path -> request headers (to check what was sent where)
 
 
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
 
     def do_GET(self):
+        SEEN[self.path] = dict(self.headers)
         status, headers, body = ROUTES.get(self.path, (404, {}, b"nf"))
         self.send_response(status)
         for k, v in headers.items():
@@ -32,11 +34,15 @@ class H(BaseHTTPRequestHandler):
 @pytest.fixture()
 def web(monkeypatch):
     ROUTES.clear()
+    SEEN.clear()
     srv = HTTPServer(("127.0.0.1", 0), H)
     port = srv.server_address[1]
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     real_gai, real_cc = socket.getaddrinfo, safe_http._original_create_connection
-    fake = {"public.test": "93.184.216.34", "meta.test": "169.254.169.254", "internal.test": "10.1.2.3"}
+    PUB = "93.184.216.34"
+    fake = {h: PUB for h in ("public.test", "agritech.tnau.ac.in", "www.icar.gov.in", "epubs.icar.org.in", "vikaspedia.in",
+                             "doi.org", "shady.test", "blog.example.com")}
+    fake.update({"meta.test": "169.254.169.254", "internal.test": "10.1.2.3"})
 
     def gai(host, port, *a, **k):
         if host in fake:
@@ -46,6 +52,8 @@ def web(monkeypatch):
     def cc(address, *a, **k):
         return real_cc(("127.0.0.1", port), *a, **k) if address[0] == "93.184.216.34" else real_cc(address, *a, **k)
 
+    from sawvial import settings
+    monkeypatch.setattr(settings, "RESEARCH_HOST_DELAY_S", 0.0)       # no politeness sleeps in tests
     monkeypatch.setattr(socket, "getaddrinfo", gai)
     monkeypatch.setattr(safe_http, "_original_create_connection", cc)
     yield ROUTES

@@ -195,6 +195,26 @@
   }
 
   /* ---------- sources (from the API) ---------- */
+  /* The language to SPEAK is decided by the text itself: Tamil text -> "ta", Latin text -> "en". This stops an English
+     answer (e.g. translation was unavailable) being read by a Tamil voice, and an old message being spoken with the
+     language of the current chat. Devanagari is shared by Hindi/Marathi, so the message's own language decides there. */
+  const SCRIPT_LANG = [[/[\u0B80-\u0BFF]/g, "ta"], [/[\u0C00-\u0C7F]/g, "te"], [/[\u0C80-\u0CFF]/g, "kn"],
+                       [/[\u0980-\u09FF]/g, "bn"], [/[\u0900-\u097F]/g, "deva"]];
+  function speechLanguageFor(text, msgLang) {
+    const latin = (text.match(/[A-Za-z]/g) || []).length;
+    let best = ["en", latin];
+    SCRIPT_LANG.forEach(function (pair) {
+      const n = (text.match(pair[0]) || []).length;
+      if (n > best[1]) best = [pair[1], n];
+    });
+    if (best[0] === "deva") return msgLang === "mr" ? "mr" : "hi";
+    return best[0];
+  }
+
+  const STAGE_KEYS = { local_search: "chat.stageLocal", online_search: "chat.stageOnline", reading: "chat.stageReading",
+                       generating: "chat.stageGenerating", translating_in: "chat.stageTranslatingIn",
+                       translating: "chat.stageTranslating" };
+
   // Only absolute http(s) URLs may become links; DOIs are validated and turned into doi.org links.
   function safeHref(u) {
     try {
@@ -221,7 +241,10 @@
       if (doi) links.push(linkHtml(doi, "DOI"));
       if (url) links.push(linkHtml(url, t("chat.sourceOpen") === "chat.sourceOpen" ? "Source" : t("chat.sourceOpen")));
       const title = escapeHtml(s.title || "");
-      return '<li><span class="src-id">' + escapeHtml(s.id) + "</span> " +
+      const kind = KIND_KEYS[s.source_type] ? t(KIND_KEYS[s.source_type]) : "";
+      const badge = (kind || s.origin === "web")
+        ? '<span class="src-kind">' + escapeHtml([kind, s.origin === "web" ? t("chat.originWeb") : ""].filter(Boolean).join(" · ")) + "</span> " : "";
+      return '<li>' + badge + '<span class="src-id">' + escapeHtml(s.id) + "</span> " +
         (head ? escapeHtml(head) + ". " : "") + (title ? "<em>" + title + "</em>. " : "") +
         (venue ? escapeHtml(venue) + ". " : "") +
         (links.length ? '<span class="src-links">' + links.join(" · ") + "</span>"
@@ -234,19 +257,40 @@
   }
 
   const NOTE_KEYS = { single_source: "chat.noteSingle", partially_supported: "chat.notePartial",
-                      extractive_fallback: "chat.noteExtractive", translation_unavailable: "chat.noteTranslation" };
+                      extractive_fallback: "chat.noteExtractive", web_unreviewed: "chat.noteWeb" };
+  const BANNER_KEYS = { translation_unavailable: "chat.noteTranslation", translation_failed: "chat.noteTranslation",
+                        input_translation_unavailable: "chat.noteInputTranslation" };
   function notesHtml(notes) {
     if (!notes || !notes.length) return "";
     return '<div class="notes">' + notes.filter(function (n) { return NOTE_KEYS[n]; })
       .map(function (n) { return "<span>" + escapeHtml(t(NOTE_KEYS[n])) + "</span>"; }).join(" ") + "</div>";
   }
+  // Problems the user must SEE (e.g. the Tamil answer is really English) - not a faint footnote.
+  function bannerHtml(notes) {
+    const keys = (notes || []).map(function (n) { return BANNER_KEYS[n]; }).filter(Boolean);
+    const uniq = keys.filter(function (k, i) { return keys.indexOf(k) === i; });
+    return uniq.map(function (k) { return '<div class="banner" role="alert">' + escapeHtml(t(k)) + "</div>"; }).join("");
+  }
+  function differencesHtml(diffs) {
+    if (!diffs || !diffs.length) return "";
+    const rows = diffs.slice(0, 3).map(function (d) {
+      const vals = d.values.slice(0, 4).map(function (v) {
+        return escapeHtml((v.title || "?").slice(0, 40)) + ": " + escapeHtml(v.low + "–" + v.high + (v.unit ? " " + v.unit : ""));
+      }).join("; ");
+      return "<li><strong>" + escapeHtml(d.quantity) + "</strong> - " + vals + "</li>";
+    }).join("");
+    return '<div class="notes differing"><span>' + escapeHtml(t("chat.noteDiffering")) + "</span><ul>" + rows + "</ul></div>";
+  }
+  const KIND_KEYS = { official_guidance: "chat.kindOfficial", research_paper: "chat.kindResearch",
+                      informational_article: "chat.kindInfo" };
 
   function pickSources(list) {
     list = list || [];
     const cited = list.filter(function (s) { return s.cited; });
     return (cited.length ? cited : list).slice(0, 4).map(function (s) {
       return { id: s.id, title: s.title, authors: s.authors, year: s.year, journal: s.journal,
-               doi: s.doi, url: s.url, page: s.page };
+               doi: s.doi, url: s.url, page: s.page, origin: s.origin, source_type: s.source_type,
+               trust_tier: s.trust_tier, retrieved_at: s.retrieved_at };
     });
   }
 
@@ -260,7 +304,11 @@
       ".src-id{font-family:ui-monospace,Consolas,monospace;font-size:11px;opacity:.7}" +
       ".src-links a{text-decoration:underline}.src-nolink{opacity:.65;font-style:italic}" +
       ".notes{margin-top:8px;font-size:12.5px;opacity:.8;font-style:italic}.notes span+span:before{content:' · '}" +
-      ".retry-row{margin-top:10px}.retry{cursor:pointer}";
+      ".retry-row{margin-top:10px}.retry{cursor:pointer}" +
+      ".banner{margin:0 0 8px;padding:8px 10px;border-radius:8px;border:1px solid #c98a00;background:rgba(201,138,0,.12);font-size:13px}" +
+      ".stage{margin-top:6px;font-size:13px;opacity:.8}" +
+      ".src-kind{display:inline-block;font-size:11px;padding:1px 6px;margin-right:4px;border-radius:999px;border:1px solid currentColor;opacity:.75}" +
+      ".differing ul{margin:4px 0 0 18px;padding:0}";
     document.head.appendChild(st);
   })();
 
@@ -312,8 +360,9 @@
       botAvatar() +
       '<div class="body">' +
       '<div class="meta">SAWVIAL <span class="tag">' + meta.icon + " " + label + "</span></div>" +
+      bannerHtml(m.notes) +
       '<div class="text"' + (m.lang ? ' lang="' + escapeHtml(m.lang) + '"' : "") + ">" + escapeHtml(m.text) + "</div>" +
-      notesHtml(m.notes) +
+      notesHtml(m.notes) + differencesHtml(m.differences) +
       sourcesHtml(m.sources) +
       '<div class="actions">' +
       '<button class="act" data-speak="' + index + '"><svg viewBox="0 0 24 24" fill="none"><path d="M11 5 6 9H3v6h3l5 4V5Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M16 9a4 4 0 0 1 0 6M19 6a8 8 0 0 1 0 12" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg><span data-speak-label>' + escapeHtml(t("chat.listen")) + '</span></button>' +
@@ -390,14 +439,20 @@
     holder.innerHTML =
       botAvatar() +
       '<div class="body"><div class="meta">SAWVIAL</div>' +
-      '<div class="dots"><i></i><i></i><i></i></div></div>';
+      '<div class="dots"><i></i><i></i><i></i></div><div class="stage" role="status" aria-live="polite"></div></div>';
     activeHolder = holder;
+    const stageEl = holder.querySelector(".stage");
+    const onStage = function (ev) {
+      if (requestId !== activeRequestId) return;
+      const key = STAGE_KEYS[ev.stage];
+      if (key) stageEl.textContent = t(key);
+    };
     inner.appendChild(holder);
     scrollDown();
 
     const call =
       typeof window.sawvialAsk === "function"
-        ? window.sawvialAsk(question, code, history, requestId)
+        ? window.sawvialAsk(question, code, history, requestId, onStage)
         : Promise.reject(new Error("js/sawvial-api.js is not loaded"));
 
     call.then(function (res) {
@@ -405,21 +460,26 @@
       const answer = ((res && res.answer) || "").trim();
       if (!answer) throw new Error("empty answer");
       const sources = res.grounded ? pickSources(res.sources) : [];
-      const answerLang = res.answer_language || code;
+      // text_language = language the answer text is REALLY written in (English if translation was unavailable)
+      const answerLang = res.text_language || code;
       const notes = ((res.grounding && res.grounding.notes) || []).slice();
-      if (res.note === "translation_unavailable") notes.push("translation_unavailable");
+      (res.warnings || []).forEach(function (w) { if (BANNER_KEYS[w] && notes.indexOf(w) < 0) notes.push(w); });
+      const diffs = ((res.research && res.research.comparison && res.research.comparison.differences) || []).slice(0, 3);
 
       const meta = topicLabels[topic] || topicLabels.crop;
       holder.querySelector(".meta").innerHTML =
         'SAWVIAL <span class="tag">' + meta.icon + " " + t("topic." + (topicLabels[topic] ? topic : "crop")) + "</span>";
       const textEl = document.createElement("div");
       textEl.className = "text";
+      textEl.lang = answerLang;
       holder.querySelector(".dots").replaceWith(textEl);
+      stageEl.remove();
+      textEl.insertAdjacentHTML("beforebegin", bannerHtml(notes));
 
       typeOut(textEl, answer, function (displayedText) {
         if (chatRef && displayedText.trim()) {
           chatRef.messages.push({ role: "bot", text: displayedText, topic: topic, sources: sources,
-                                  lang: answerLang, notes: notes });
+                                  lang: answerLang, notes: notes, differences: diffs });
         }
         save();
         busy = false;
@@ -454,6 +514,7 @@
       retry.appendChild(btn);
       const dots = holder.querySelector(".dots");
       if (dots) dots.replaceWith(textEl);
+      stageEl.remove();
       textEl.after(retry);
       busy = false;
       updateSend();
@@ -641,7 +702,7 @@
     }
     stopSpeech();
     // speak in the language the answer is actually written in (it may be English if translation failed)
-    const code = msgLang || getSelectedLanguage() || "en";
+    const code = speechLanguageFor(text, msgLang || getSelectedLanguage() || "en");
     const local = ((window.SAWVIAL_CAPS && window.SAWVIAL_CAPS.speech_local) || []).indexOf(code) !== -1;
     if (local && window.sawvialSpeak) {
       speakWithLocalVoice(text, code, btn);

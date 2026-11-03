@@ -82,6 +82,35 @@ def clean_finding(finding: Optional[str]) -> Optional[str]:
     return finding
 
 
+# ---- aspect check: does a passage talk about what the QUESTION asks about? --------------------------------------
+# Crop gating + a similarity score are not enough: a tomato passage about irrigation does not answer "which soil is
+# good for tomato". Each rule says: if the question asks about X, a passage only counts if it uses X-type vocabulary.
+# These rules describe what evidence must be ABOUT; they contain no answers and no crop-specific facts.
+ASPECT_RULES = [
+    ("soil suitability",
+     re.compile(r"\bsoils?\b.*\b(type|types|kind|kinds|texture|suitable|suitability|requirements?|good|best|ideal|ph|drainage|grow\w*)\b"
+                r"|\b(type|types|kind|kinds|texture|suitable|requirements?|good|best|ideal)\b.*\bsoils?\b", re.I),
+     re.compile(r"\b(loam\w*|sand\w*|clay\w*|silt\w*|textur\w*|ph|drain\w*|organic (?:matter|carbon)|soil (?:type|reaction|structure|texture|depth)|"
+                r"alluvial|laterite|vertisol\w*|black soil|red soil|saline|sodic|acid\w*|alkalin\w*|waterlog\w*|fertile|fertility)\b", re.I)),
+    ("water requirement",
+     re.compile(r"\b(how much|requirements?|needs?|schedul\w*|when|interval|frequency|amount|quantity)\b.*\b(water|irrigat\w*)\b"
+                r"|\b(water|irrigat\w*)\b.*\b(requirements?|needs?|schedul\w*|interval|frequency|amount|quantity)\b", re.I),
+     re.compile(r"\b(mm|litres?|liters?|irrigat\w*|water requirement|evapotranspiration|etc?|kc|cwr|schedul\w*|interval|depth|critical stage)\b", re.I)),
+    ("fertilizer / nutrients",
+     re.compile(r"\b(fertili[sz]\w*|nutrients?|manure|npk|nitrogen|phosph\w*|potash|potassium)\b", re.I),
+     re.compile(r"\b(fertili[sz]\w*|nutrients?|manure|npk|nitrogen|phosph\w*|potash|potassium|kg ha|kg/ha|dose|compost)\b", re.I)),
+]
+
+
+def aspect_filter(question: str, passages: List[Dict[str, Any]]) -> tuple:
+    """-> (kept_passages, label_or_None). If the question matches an aspect rule only passages that use the
+    matching vocabulary are kept (possibly none -> the caller treats local evidence as insufficient)."""
+    for label, q_rule, ev_rule in ASPECT_RULES:
+        if q_rule.search(question):
+            return [p for p in passages if ev_rule.search(p.get("text") or "")], label
+    return passages, None
+
+
 def retrieve_passages(bundle: Dict[str, Any], question: str, top_k: int,
                       embedder=None) -> Dict[str, Any]:
     """Return {"passages": [...], "crops": [...], "crop_missing": bool}."""
@@ -122,6 +151,9 @@ def retrieve_passages(bundle: Dict[str, Any], question: str, top_k: int,
             "recommendation": None if crop_focused else r["recommendation"],
             "context": context,
             "structured_facts": [] if crop_focused else r["structured_facts"],
+            "origin": bundle.get("origin", "local"),
+            "source_type": src.get("source_type"), "trust_tier": src.get("trust_tier"),
+            "retrieved_at": src.get("retrieved_at"), "published": src.get("published"),
             "crop_focused": crop_focused, "crop_labeled": crop_labeled,
             "crop_mentions": crop_mentions, "status": r["validation_status"],
             "score": r["score"], "rank": len(passages) + 1,
@@ -130,7 +162,13 @@ def retrieve_passages(bundle: Dict[str, Any], question: str, top_k: int,
             break
     if crops and not passages:
         crop_missing = True
-    return {"passages": passages, "crops": crops, "crop_missing": crop_missing}
+    aspect = None
+    if passages:
+        passages, aspect = aspect_filter(question, passages)
+        for i, p in enumerate(passages, 1):
+            p["rank"] = i
+    return {"passages": passages, "crops": crops, "crop_missing": crop_missing, "aspect": aspect,
+            "aspect_unmet": bool(aspect) and not passages}
 
 
 def get_passages(bundle, embedder, question, top_k):

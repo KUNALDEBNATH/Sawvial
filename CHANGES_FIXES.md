@@ -1,5 +1,29 @@
 # SAWVIAL change log
 
+## 2026-10 (round 3): no API keys, GPU-first, one setup snippet
+
+* Removed every API key and the key-based/optional search providers (Brave, SearXNG). Search = key-less OpenAlex (open-access works only) + Crossref.
+* GPU: `SAWVIAL_DEVICE=cuda` is the default; a CPU-only PyTorch build is refused with the exact fix. The LLM runs in 16-bit on the GPU (4-bit only with `--4bit`);
+  health reports the device and VRAM. `numpy<2` and `bitsandbytes` pins removed from the runtime requirements.
+* The search index is built/repaired automatically at start-up (missing, half-committed, old format, other scikit-learn version, stale dataset).
+* README reduced to one setup-and-run snippet; maintenance material moved to `docs/MAINTENANCE.md`.
+
+## 2026-10 (round 2): language handling, research inside /api/ask, Tamil audio
+
+* **Language**: `input_language` and `answer_language` are separate (`sawvial/language.py`); an English question with Tamil selected is no longer
+  translated "from Tamil". Responses carry `input_language`, `answer_language` (requested), `text_language` (what the text really is), `translation`, `warnings`.
+  Every early return (greeting, out-of-scope, no evidence, cancelled, mock) is translated consistently; failures are visible, never silent.
+* **Research in the chat**: local first -> relevance check (crop + aspect + score) -> `sawvial/research/live.py` (search, fetch, extract, rank) -> grounded answer.
+  Streaming endpoint `/api/ask/stream` shows real stages. New settings `SAWVIAL_ONLINE_RESEARCH`, `SAWVIAL_WEB_SEARCH_*`, `SAWVIAL_RESEARCH_*`; `.env` is now loaded.
+* **Search/trust**: Brave/SearXNG (optional) + OpenAlex + Crossref; trust tier decided from the FINAL url; robots.txt, per-host delay, caching; HTML extractor strips boilerplate, decodes charsets.
+* **Publishing** is a transaction (dataset snapshot/rollback, index swap, mark-published last).
+* **Grounding**: overclaim words must appear in the evidence; verbatim-excerpt last resort instead of a generic refusal.
+* **Frontend**: stage labels, `text_language`-based display, translation banner, source kind/origin badges, differing values, speech language chosen from the text itself.
+* **Fixed**: `index/` half-committed (heavy files git-ignored) now gives a clear rebuild message; tomato *irrigation* passages no longer count as evidence for a tomato *soil* question.
+
+---
+
+
 ## 2026-10 audit: grounding, retrieval, ingestion, research, frontend
 
 See README.md for usage. Summary of what changed and why (details in the final audit report):

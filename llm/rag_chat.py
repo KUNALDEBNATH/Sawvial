@@ -28,7 +28,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 from sawvial import settings
 from sawvial.index.passages import get_passages, retrieve_passages        # noqa: F401  (re-exported)
-from sawvial.index.retriever import load_index_bundle
+from sawvial.device import pick_device
+from sawvial.index.retriever import ensure_index_bundle
 from sawvial.model_config import ModelConfigError, inspect_adapter
 from common import SYSTEM_PROMPT, format_context, make_user_prompt
 
@@ -38,7 +39,7 @@ DOWNLOAD_HINT = "python tools/download_models.py"
 
 def load_retriever(index_dir, dataset_dir):
     """Returns (bundle, embedder). embedder is None for a lexical-only index."""
-    bundle = load_index_bundle(index_dir, dataset_dir)
+    bundle = ensure_index_bundle(index_dir, dataset_dir)
     return bundle, bundle.get("dense_embedder")
 
 
@@ -92,8 +93,11 @@ def load_llm(args):
             raise ModelConfigError(f"Adapter at {adapter_dir} does not match base model {base!r}: "
                                    f"{check.message()}. Use --base_only to run without the adapter.")
 
-    use_4bit = bool(getattr(args, "four_bit", False)) or bool(check and check.four_bit_trained)
-    cuda = torch.cuda.is_available()
+    dev = pick_device(torch)                      # raises a clear error if the GPU cannot be used (CPU-only torch ...)
+    status["device"] = dev
+    cuda = dev["device"] == "cuda"
+    # 16-bit weights on the GPU (Qwen2.5-1.5B needs ~3 GB); 4-bit only if explicitly requested with --4bit
+    use_4bit = bool(getattr(args, "four_bit", False))
     if use_4bit and not (cuda and _bnb_available()):
         if cuda:
             log.warning("4-bit loading requested but bitsandbytes is not installed; using 16-bit weights")
@@ -122,6 +126,9 @@ def load_llm(args):
         model.to("cuda")
     model.eval()
     status["four_bit"] = use_4bit
+    if cuda:
+        status["vram_used_mb"] = int(torch.cuda.memory_allocated() // (1024 * 1024))
+        log.info("LLM on GPU %s: %d MB VRAM used of %s MB", dev["name"], status["vram_used_mb"], dev["vram_mb"])
     log.info("LLM ready: %s", status)
     return tok, model, status
 

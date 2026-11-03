@@ -63,7 +63,7 @@ def _load_model(language: str):
     model_id = MODEL_IDS[language]
     try:
         tokenizer = AutoTokenizer.from_pretrained(model_id, local_files_only=settings.OFFLINE)
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = "cuda" if (settings.DEVICE != "cpu" and torch.cuda.is_available()) else "cpu"
         model = VitsModel.from_pretrained(model_id, local_files_only=settings.OFFLINE).to(device).eval()
     except OSError as exc:
         raise SpeechUnavailable(

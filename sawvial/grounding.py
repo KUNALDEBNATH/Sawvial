@@ -31,6 +31,11 @@ _REFUSAL = re.compile(
     r"^(?:the (?:provided )?(?:sources|records|dataset)\b.{0,60}\b(?:do(?:es)? not|don't|cannot)\b|"
     r"(?:there is|i could(?: not|n't) find) (?:no|not enough)\b)", re.I)
 
+# Overclaiming words: a sentence may only use them if the cited evidence uses them too
+# ("doubles", "always", "guaranteed", "miracle" ... are not supported just because the topic words match).
+_ABSOLUTE = re.compile(r"\b(doubl\w*|tripl\w*|halv\w*|eliminat\w*|guarante\w*|always|never|every\w*|all|completely|"
+                       r"entirely|only|miracle\w*|cure\w*|unlimited|best|worst|perfect\w*|no)\b", re.I)
+
 # fraction of a sentence's content terms that must occur in the cited text
 MIN_TERM_SUPPORT = 0.40
 MIN_SHARED_TERMS = 3
@@ -89,6 +94,11 @@ def _supports(sentence: str, evidence: str) -> Tuple[bool, str]:
     missing = _numbers(sentence) - _numbers(evidence)
     if missing:
         return False, "number_not_in_evidence:" + ",".join(sorted(missing))
+    ev_words = set(re.findall(r"[a-z]+", evidence.lower()))
+    for m in _ABSOLUTE.finditer(strip_citations(sentence)):
+        stem = m.group(1).lower()[:5]
+        if not any(w.startswith(stem) for w in ev_words):
+            return False, f"overclaim_not_in_evidence:{m.group(1).lower()}"
     return True, "ok"
 
 
@@ -162,6 +172,21 @@ def extractive_answer(question: str, passages: List[Dict[str, Any]]) -> Optional
     if out and out[-1] not in ".!?":
         out += "..."
     return f"According to the retrieved research records: {out}", passage
+
+
+def excerpt_answer(passages: List[Dict[str, Any]]) -> Optional[Tuple[str, Dict[str, Any]]]:
+    """Last resort when the model's text could not be verified and no sentence matches the question closely:
+    return the best-ranked passage's first complete sentences VERBATIM, clearly labelled. Never invented text;
+    None if no passage contains complete sentences."""
+    for p in sorted(passages, key=lambda x: -float(x.get("score") or 0)):
+        text = re.sub(r"\s+", " ", p.get("text") or "").strip()
+        sents = [x.strip() for x in re.split(r"(?<=[.!?])\s+", text) if len(x.split()) >= 6 and x[0].isupper()]
+        if sents:
+            out = " ".join(sents[:2])
+            if len(out) > 480:
+                out = sents[0][:480].rsplit(" ", 1)[0] + "..."
+            return f"The most relevant passage found says: {out}", p
+    return None
 
 
 def evidence_level(cited_ids: List[str], passages: List[Dict[str, Any]]) -> str:

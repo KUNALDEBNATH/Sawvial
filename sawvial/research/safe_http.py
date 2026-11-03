@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import re
 import socket
 import threading
 import time
@@ -30,7 +31,7 @@ import urllib3.util.connection as _u3
 
 from sawvial import settings
 
-USER_AGENT = "SAWVIAL-research/1.0 (agricultural evidence collector; contact: see SAWVIAL_CONTACT_EMAIL)"
+USER_AGENT = "SAWVIAL-research/1.0 (agricultural evidence collector)"
 _BLOCKED_NAMES = {"localhost", "metadata.google.internal", "metadata"}
 _BLOCKED_SUFFIXES = (".local", ".localhost", ".internal", ".lan", ".home", ".corp")
 
@@ -40,7 +41,11 @@ class UnsafeURL(ValueError):
 
 
 class FetchError(RuntimeError):
-    """The download failed or violated a limit. The message is safe to show to the user."""
+    """The download failed or violated a limit. The message is safe to show to the user.
+    `status` is the HTTP status code when the server answered with an error."""
+    def __init__(self, message: str, status: Optional[int] = None):
+        super().__init__(message)
+        self.status = status
 
 
 def _ip_is_public(ip: str) -> bool:
@@ -117,6 +122,7 @@ class FetchResult:
     content: bytes
     sha256: str
     redirects: List[str] = field(default_factory=list)
+    charset: Optional[str] = None          # from the Content-Type header, if declared
 
 
 def fetch(url: str, *, allowed_types: Iterable[str], max_bytes: Optional[int] = None,
@@ -159,7 +165,7 @@ def fetch(url: str, *, allowed_types: Iterable[str], max_bytes: Optional[int] = 
         else:
             raise FetchError(f"more than {max_redirects} redirects")
         if resp.status_code != 200:
-            raise FetchError(f"HTTP {resp.status_code} from {urlparse(current).hostname}")
+            raise FetchError(f"HTTP {resp.status_code} from {urlparse(current).hostname}", status=resp.status_code)
         ctype = resp.headers.get("Content-Type", "").split(";")[0].strip().lower()
         if ctype not in allowed_types:
             raise FetchError(f"content type {ctype or 'unknown'!r} is not allowed")
@@ -179,8 +185,10 @@ def fetch(url: str, *, allowed_types: Iterable[str], max_bytes: Optional[int] = 
         data = bytes(buf)
         if ctype == "application/pdf" and not data.lstrip()[:5] == b"%PDF-":
             raise FetchError("response claims to be a PDF but is not")
+        m = re.search(r"charset=([\w-]+)", resp.headers.get("Content-Type", ""), re.I)
         return FetchResult(url=url, final_url=current, content_type=ctype, content=data,
-                           sha256=hashlib.sha256(data).hexdigest(), redirects=hops)
+                           sha256=hashlib.sha256(data).hexdigest(), redirects=hops,
+                           charset=m.group(1) if m else None)
     finally:
         if resp is not None:
             resp.close()
