@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -30,6 +31,25 @@ TRANSITIONS = {
     "verified": {"rejected"},
     "rejected": {"pending_review"},
 }
+
+# Every mutation below is read-all-rows -> modify -> write-all-rows. os.replace() makes the WRITE
+# itself atomic, but without a lock around the whole read-modify-write cycle, two concurrent
+# requests (e.g. two /api/ask calls that both trigger online research at once) can each read the
+# same snapshot and the second writer silently clobbers the first writer's additions (a classic
+# lost-update race). A process-wide lock per records file serialises these cycles. This protects
+# concurrent threads within one process (how api.py runs); a multi-process deployment would need
+# an OS-level file lock instead, which is out of scope for this in-process JSONL store.
+_LOCKS: Dict[str, threading.Lock] = {}
+_LOCKS_GUARD = threading.Lock()
+
+
+def _lock_for(path: Path) -> threading.Lock:
+    key = str(path.resolve()) if path.exists() or path.parent.exists() else str(path)
+    with _LOCKS_GUARD:
+        lock = _LOCKS.get(key)
+        if lock is None:
+            lock = _LOCKS[key] = threading.Lock()
+        return lock
 
 
 def _read(path: Path) -> List[Dict[str, Any]]:
@@ -90,7 +110,8 @@ class ResearchStore:
                 and _norm_url(r["source"].get("final_url") or r["source"].get("url")) in want]
 
     def add_source(self, source: Dict[str, Any]) -> None:
-        _write(self.sources_file, self.sources() + [source])
+        with _lock_for(self.sources_file):
+            _write(self.sources_file, self.sources() + [source])
 
     # ---- records (units) ----
     def records(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -99,22 +120,23 @@ class ResearchStore:
 
     def add_records(self, units: List[Dict[str, Any]]) -> Dict[str, int]:
         """Append units (status must already be pending_review). Skips duplicate evidence."""
-        rows = self.records()
-        seen = {r["provenance"]["evidence_hash"] for r in rows}
-        nxt = 1 + max((int(r["id"].split("_")[1]) for r in rows), default=0)
-        added = dup = 0
-        for u in units:
-            if u["provenance"]["evidence_hash"] in seen:
-                dup += 1
-                continue
-            seen.add(u["provenance"]["evidence_hash"])
-            u["id"] = f"SWR_{nxt:06d}"
-            nxt += 1
-            u["quality"]["validation_status"] = "pending_review"
-            rows.append(u)
-            added += 1
-        _write(self.records_file, rows)
-        return {"added": added, "duplicates_skipped": dup}
+        with _lock_for(self.records_file):
+            rows = self.records()
+            seen = {r["provenance"]["evidence_hash"] for r in rows}
+            nxt = 1 + max((int(r["id"].split("_")[1]) for r in rows), default=0)
+            added = dup = 0
+            for u in units:
+                if u["provenance"]["evidence_hash"] in seen:
+                    dup += 1
+                    continue
+                seen.add(u["provenance"]["evidence_hash"])
+                u["id"] = f"SWR_{nxt:06d}"
+                nxt += 1
+                u["quality"]["validation_status"] = "pending_review"
+                rows.append(u)
+                added += 1
+            _write(self.records_file, rows)
+            return {"added": added, "duplicates_skipped": dup}
 
     def set_status(self, ids: Iterable[str], new_status: str, reviewer: str, note: str = "") -> List[str]:
         """Human review decision. Returns the ids changed; raises ValueError on a bad request."""
@@ -123,32 +145,34 @@ class ResearchStore:
         if not reviewer.strip():
             raise ValueError("a reviewer name is required (--reviewer)")
         wanted, changed = set(ids), []
-        rows = self.records()
-        known = {r["id"] for r in rows}
-        if wanted - known:
-            raise ValueError(f"unknown record ids: {sorted(wanted - known)}")
-        for r in rows:
-            if r["id"] not in wanted:
-                continue
-            cur = r["quality"]["validation_status"]
-            if new_status not in TRANSITIONS.get(cur, set()):
-                raise ValueError(f"{r['id']}: cannot change {cur} -> {new_status}")
-            if new_status == "verified" and r["quality"].get("flags"):
-                raise ValueError(f"{r['id']} is flagged ({r['quality']['flags']}); it cannot be verified")
-            r["quality"]["validation_status"] = new_status
-            r["quality"].setdefault("review_log", []).append({
-                "status": new_status, "reviewer": reviewer.strip(), "note": note,
-                "at": datetime.now(timezone.utc).isoformat()})
-            changed.append(r["id"])
-        _write(self.records_file, rows)
-        return changed
+        with _lock_for(self.records_file):
+            rows = self.records()
+            known = {r["id"] for r in rows}
+            if wanted - known:
+                raise ValueError(f"unknown record ids: {sorted(wanted - known)}")
+            for r in rows:
+                if r["id"] not in wanted:
+                    continue
+                cur = r["quality"]["validation_status"]
+                if new_status not in TRANSITIONS.get(cur, set()):
+                    raise ValueError(f"{r['id']}: cannot change {cur} -> {new_status}")
+                if new_status == "verified" and r["quality"].get("flags"):
+                    raise ValueError(f"{r['id']} is flagged ({r['quality']['flags']}); it cannot be verified")
+                r["quality"]["validation_status"] = new_status
+                r["quality"].setdefault("review_log", []).append({
+                    "status": new_status, "reviewer": reviewer.strip(), "note": note,
+                    "at": datetime.now(timezone.utc).isoformat()})
+                changed.append(r["id"])
+            _write(self.records_file, rows)
+            return changed
 
     def publishable(self) -> List[Dict[str, Any]]:
         return [r for r in self.records("verified") if not r["quality"].get("published_as")]
 
     def mark_published(self, mapping: Dict[str, str]) -> None:
-        rows = self.records()
-        for r in rows:
-            if r["id"] in mapping:
-                r["quality"]["published_as"] = mapping[r["id"]]
-        _write(self.records_file, rows)
+        with _lock_for(self.records_file):
+            rows = self.records()
+            for r in rows:
+                if r["id"] in mapping:
+                    r["quality"]["published_as"] = mapping[r["id"]]
+            _write(self.records_file, rows)

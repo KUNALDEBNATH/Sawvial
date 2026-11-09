@@ -616,9 +616,18 @@ def run_ask(question: str, lang: str, top_k: int, history=None, cancel_event=Non
     # ---- 4. generate + verify
     progress("generating")
     t2 = time.time()
-    with INFER_LOCK:
-        raw = rag.answer(STATE["tok"], STATE["model"], q_en, passages, CFG["max_new_tokens"],
-                         history=prior if follow_up else [], cancel_event=cancel_event) or ""
+    try:
+        with INFER_LOCK:
+            raw = rag.answer(STATE["tok"], STATE["model"], q_en, passages, CFG["max_new_tokens"],
+                             history=prior if follow_up else [], cancel_event=cancel_event) or ""
+    except Exception as exc:
+        import torch
+        if isinstance(exc, torch.cuda.OutOfMemoryError):
+            log.error("CUDA out of memory while generating an answer (even after the in-generation retry)")
+            torch.cuda.empty_cache()
+            return direct("The server ran out of GPU memory while generating this answer. Please try a "
+                          "shorter question, or try again in a moment.", "gpu_out_of_memory", research_report)
+        raise
     timings["generation"] = int((time.time() - t2) * 1000)
     if cancel_event is not None and cancel_event.is_set():
         return direct("Stopped.", "cancelled", research_report)
@@ -627,21 +636,68 @@ def run_ask(question: str, lang: str, top_k: int, history=None, cancel_event=Non
     report = grounding.assess(raw, passages)
     text, cited_ids = grounding.compose_supported_answer(report)
     removed = report["n_claims"] - report["n_supported"]
+    if removed:
+        # Diagnostic only (no behavior change): logs exactly which generated sentences
+        # grounding dropped and why, so a "the LLM's good sentence disappeared" report
+        # can be root-caused from the server log instead of guessing. See grounding.py's
+        # `_supports()` reason strings (low_term_overlap / number_not_in_evidence /
+        # overclaim_not_in_evidence / no_citation / only_invalid_citations).
+        log.info("grounding dropped %d/%d sentence(s): %s", removed, report["n_claims"],
+                 [(s["text"], s["reason"]) for s in report["sentences"] if not s["supported"] and not s["refusal"]])
+    regenerated = False
     if text:
         status = "supported" if not removed and not report["invalid_citations"] else "partially_supported"
     else:
-        fb = grounding.extractive_answer(q_en, passages)
-        if fb:
-            text, best = fb
-            cited_ids, status = [best["id"]], "extractive_fallback"
-        else:
-            ex = grounding.excerpt_answer(passages)          # last resort: a verbatim, relevant excerpt (never invented)
-            if ex is None:
-                timings["grounding"] = int((time.time() - t3) * 1000)
-                return direct(NO_DATA_ANSWER, "insufficient_evidence", research_report,
-                              reason="model_output_not_supported", invalid_citations=report["invalid_citations"])
-            text, best = ex
-            cited_ids, status = [best["id"]], "excerpt_only"
+        # Grounding validation failed outright (no sentence of the model's answer was supported).
+        # Rather than immediately quoting raw source text as if it were a generated answer, give
+        # the model ONE controlled retry with concrete feedback about what was wrong, and validate
+        # that retry the same way. Only if the retry ALSO fails do we fall back to a verbatim
+        # excerpt, clearly labelled as such (never invented, never presented as the model's answer).
+        unsupported_reasons = sorted({s["reason"] for s in report["sentences"] if not s["supported"] and not s["refusal"]})
+        feedback_bits = []
+        if report["invalid_citations"]:
+            feedback_bits.append(f"these citation ids do not exist in the supplied records: {', '.join(report['invalid_citations'])}")
+        if unsupported_reasons:
+            feedback_bits.append("claims were rejected for: " + "; ".join(unsupported_reasons))
+        feedback = ("No claim in your answer could be verified against the supplied records "
+                    f"({'; '.join(feedback_bits) if feedback_bits else 'no valid citation was found'})."
+                    ) if (feedback_bits or report["n_claims"]) else None
+        try:
+            with INFER_LOCK:
+                retry_raw = rag.answer(STATE["tok"], STATE["model"], q_en, passages, CFG["max_new_tokens"],
+                                       history=prior if follow_up else [], cancel_event=cancel_event,
+                                       feedback=feedback) or ""
+        except Exception as exc:
+            import torch
+            if isinstance(exc, torch.cuda.OutOfMemoryError):
+                torch.cuda.empty_cache()
+                retry_raw = ""
+            else:
+                raise
+        if cancel_event is not None and cancel_event.is_set():
+            timings["grounding"] = int((time.time() - t3) * 1000)
+            return direct("Stopped.", "cancelled", research_report)
+        if retry_raw:
+            retry_report = grounding.assess(retry_raw, passages)
+            retry_text, retry_ids = grounding.compose_supported_answer(retry_report)
+            if retry_text:
+                report, text, cited_ids, regenerated = retry_report, retry_text, retry_ids, True
+                removed = report["n_claims"] - report["n_supported"]
+                status = "supported" if not removed and not report["invalid_citations"] else "partially_supported"
+
+        if not text:
+            fb = grounding.extractive_answer(q_en, passages)
+            if fb:
+                text, best = fb
+                cited_ids, status = [best["id"]], "extractive_fallback"
+            else:
+                ex = grounding.excerpt_answer(passages)          # last resort: a verbatim, relevant excerpt (never invented)
+                if ex is None:
+                    timings["grounding"] = int((time.time() - t3) * 1000)
+                    return direct(NO_DATA_ANSWER, "insufficient_evidence", research_report,
+                                  reason="model_output_not_supported", invalid_citations=report["invalid_citations"])
+                text, best = ex
+                cited_ids, status = [best["id"]], "excerpt_only"
     timings["grounding"] = int((time.time() - t3) * 1000)
 
     # ---- 5. compare sources, state uncertainty
@@ -653,6 +709,7 @@ def run_ask(question: str, lang: str, top_k: int, history=None, cancel_event=Non
                                ("partially_supported", status == "partially_supported"),
                                ("extractive_fallback", status in ("extractive_fallback", "excerpt_only")),
                                ("web_unreviewed", "web" in origins),
+                               ("regenerated_after_grounding_failure", regenerated),
                                ("differing_values", bool(comparison["differences"]))) if cond]
     progress("translating") if lang != "en" else None
     out_text, text_lang = tl.from_english(text)

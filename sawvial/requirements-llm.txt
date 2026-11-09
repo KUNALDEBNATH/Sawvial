@@ -1,0 +1,11 @@
+# Local LLM + LoRA adapter + translation (NLLB) + local speech (MMS-TTS).
+# PyTorch itself is installed FIRST by the README snippet from the CUDA wheel index (a plain `pip install torch`
+# gives the CPU-only build on Windows, which SAWVIAL refuses to run on).
+-r requirements.txt
+torch>=2.2
+transformers>=4.44,<5
+peft>=0.12
+accelerate>=0.33
+sentencepiece
+protobuf
+huggingface_hub>=0.23

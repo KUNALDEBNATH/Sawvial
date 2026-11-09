@@ -287,12 +287,26 @@ def _latin_share(raw: RawDocument) -> float:
 
 
 def ingest_url(url: str, store: ResearchStore, pipe: Pipeline, hint: Optional[Candidate] = None,
-               ocr: bool = False, allow_private: bool = False, min_trust: Optional[str] = None) -> Dict[str, Any]:
+               ocr: bool = False, allow_private: bool = False, min_trust: Optional[str] = None,
+               cancel_event=None) -> Dict[str, Any]:
     """Download ONE document and store its evidence as pending_review. Never raises for network problems;
-    returns {status: ok|cached|duplicate|failed, reason, source_url, ...}."""
+    returns {status: ok|cached|duplicate|failed, reason, source_url, ...}.
+
+    `cancel_event`, when given, is checked before each potentially slow step (robots/throttle, the
+    HTTP fetch, and document processing) so a cancelled request stops doing further work as soon as
+    possible rather than only being noticed after the whole document finished ingesting. A single
+    in-flight socket read still cannot be interrupted mid-byte; the per-request timeout in
+    safe_http bounds how long that can take.
+    """
     from sawvial.pipeline import process_document
     out: Dict[str, Any] = {"url": url, "status": "failed", "reason": None, "records_added": 0, "source_url": None}
     min_trust = min_trust or settings.RESEARCH_MIN_TRUST
+
+    def cancelled() -> bool:
+        return cancel_event is not None and cancel_event.is_set()
+
+    if cancelled():
+        return {**out, "reason": "cancelled"}
 
     cached = store.find_cached_source(url, settings.RESEARCH_CACHE_DAYS)
     if cached:                                                       # unchanged document: no second download
@@ -309,6 +323,8 @@ def ingest_url(url: str, store: ResearchStore, pipe: Pipeline, hint: Optional[Ca
         if not ok:
             return {**out, "reason": why}
         throttle(host)
+    if cancelled():
+        return {**out, "reason": "cancelled"}
     try:
         res = safe_http.fetch(url, allowed_types=ALLOWED_DOC_TYPES, allow_private=allow_private,
                               allowed_domains=settings.RESEARCH_ALLOWED_DOMAINS or None,
@@ -349,6 +365,8 @@ def ingest_url(url: str, store: ResearchStore, pipe: Pipeline, hint: Optional[Ca
     if _latin_share(raw) < 0.5:
         return {**out, "reason": "page is not in English (non-English sources are not supported yet)"}
 
+    if cancelled():
+        return {**out, "reason": "cancelled"}
     doi = (hint.doi if hint else None) or html_meta.get("doi")
     provider = hint.provider if hint else "direct_url"
     source_type = classify_source(res.final_url, doi, provider, res.content_type)

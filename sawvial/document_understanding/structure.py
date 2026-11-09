@@ -131,7 +131,13 @@ def build_structured_document(raw_doc: RawDocument) -> StructuredDocument:
     def flush_buffer():
         nonlocal paragraph_buffer, buffer_page
         if paragraph_buffer:
-            text = clean_page_text(" ".join(paragraph_buffer), repeated_lines)
+            # Join with "\n", not a space: clean_page_text()/_dehyphenate() only rejoin a
+            # hyphenated line-wrap ("irriga-\ntion" -> "irrigation") when the hyphen is directly
+            # followed by a newline. Joining with a space here (as before) meant that pattern
+            # never matched, so hyphenated words split across two PDF text lines were silently
+            # left broken ("irriga- tion"). clean_page_text() flattens any remaining real line
+            # wraps back to spaces once dehyphenation has had a chance to run.
+            text = clean_page_text("\n".join(paragraph_buffer), repeated_lines)
             if text and len(text.split()) >= 4:
                 current.paragraphs.append(Paragraph(text=text, page=buffer_page or 1, section=current.name))
         paragraph_buffer = []
@@ -142,7 +148,21 @@ def build_structured_document(raw_doc: RawDocument) -> StructuredDocument:
         bx0, by0, bx1, by1 = block.bbox
         return bx0 >= x0 - 2 and bx1 <= x1 + 2 and by0 >= y0 - 2 and by1 <= y1 + 2
 
-    for page in raw_doc.pages:
+    _SENTENCE_END_RE = re.compile(r"[.!?:;][\"')\]]?\s*$")
+
+    for page_index, page in enumerate(raw_doc.pages):
+        if page_index > 0 and paragraph_buffer:
+            # The vertical-gap heuristic above only compares bounding boxes within one page's
+            # coordinate system, so it is disabled across a page boundary (prev_bbox_bottom is
+            # reset below) and would otherwise silently glue the last paragraph of this page onto
+            # the first paragraph of the next one whenever no heading happens to fall between
+            # them. If the buffered text already looks like it ended a sentence, treat the page
+            # break as a paragraph break too; a buffer that does NOT end a sentence (including one
+            # ending mid-word on a hyphen, which _dehyphenate() will rejoin) is assumed to be a
+            # paragraph that genuinely continues onto the next page, so it is left to accumulate.
+            joined = "\n".join(paragraph_buffer).strip()
+            if joined and not joined.endswith("-") and _SENTENCE_END_RE.search(joined):
+                flush_buffer()
         prev_bbox_bottom = None
         prev_line_height = None
         attached = set()
@@ -182,7 +202,7 @@ def build_structured_document(raw_doc: RawDocument) -> StructuredDocument:
             prev_bbox_bottom = bottom
             prev_line_height = line_height
 
-            if len(" ".join(paragraph_buffer)) > 1200:
+            if len("\n".join(paragraph_buffer)) > 1200:
                 flush_buffer()
                 prev_bbox_bottom = None
                 prev_line_height = None

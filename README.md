@@ -1,71 +1,91 @@
-# SAWVIAL - multilingual, voice-enabled assistant for soil & water management
+# SAWVIAL — Static Frontend
 
-Ask a question about crops, soil, irrigation or water in English, Hindi, Bengali, Tamil, Telugu, Kannada or Marathi (typed or spoken).
-SAWVIAL searches its local research knowledge base first; if that cannot answer, it **searches online** (OpenAlex / Crossref, no API key),
-reads the open-access papers and pages, and writes an evidence-based answer **in the language you selected**, with clickable sources and
-a spoken version. It says so honestly when it cannot find evidence. No API key is used anywhere; everything runs on your own GPU.
+A static HTML/CSS/JS frontend for SAWVIAL, a voice-first, multilingual
+agricultural assistant. No build step, no dependencies, no backend.
 
-> Not scientifically validated: answers come from automatic checks, and live web evidence is shown as *not reviewed by an expert*.
-> Have an agronomist review the advice.
-
-## Run it (Windows, Command Prompt or PowerShell) - everything you need, in this order
-
-Needs: Python 3.10-3.12, an NVIDIA GPU with a current driver (yours: RTX 4060, 8 GB), internet for the first run only (~6 GB of model downloads).
-Open a terminal **inside the unzipped `Sawvial` folder** and run:
+## File structure
 
 ```
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install torch --index-url https://download.pytorch.org/whl/cu128
-.\.venv\Scripts\python.exe -m pip install -r requirements-llm.txt
-.\.venv\Scripts\python.exe tools\download_models.py
-.\.venv\Scripts\python.exe api.py
+sawvial/
+├── index.html          Landing page (photo-led marketing page)
+├── ask.html            The assistant — chat UI with sidebar history
+├── language.html       Language selection
+├── help.html           How-to-use guide + FAQ
+├── css/landing.css     Styles for index / language / help
+├── css/chat.css        Styles for the chat UI
+├── js/i18n.js          Every UI string in all 7 languages + applyI18n()/t()
+├── js/script.js        Shared data (languages, demo Q&A) + language helpers
+├── js/chat.js          All chat behaviour: history, answers, mic, playback
+└── assets/             logo/, images/, icons/ — empty by design, see below
 ```
 
-Then open **http://localhost:8000** (press Ctrl+F5 once so the browser loads the new page code).
-
-* The first four lines and the model download are needed **once**. Next time, only the last line: `.\.venv\Scripts\python.exe api.py` (from the same folder).
-* Line 3 installs the **CUDA** build of PyTorch. SAWVIAL uses the GPU and **refuses to start on the CPU** by accident; if PyTorch cannot see your GPU it stops
-  and prints the exact fix. The LLM (about 3 GB), the translator and the Tamil voice all run on the GPU and fit in 8 GB.
-* The search index is built or repaired automatically at start-up (about 15 seconds when needed). Nothing else to run.
-
-Check that it is really using the GPU and everything loaded (a second terminal, while the server runs):
+## How the pages connect
 
 ```
-curl http://localhost:8000/api/health
+index.html ──► ask.html ──► language.html (only if no language chosen yet)
+                  ▲                │
+                  └────────────────┘
 ```
-Look for `"device"` (your GPU name), `"translator": true`, `"speech_local"` (contains `"ta"` for Tamil), `"index"` with `"stale": false`.
-If `translator` is false, `translator_error` contains the exact fix.
 
-## How an answer is produced
+There is no longer a separate "listening" or "answer" page. Questions and
+answers appear in the same thread, one below the other, like a chat.
 
-1. **Language** - the question's language is detected from its script; the answer language is the one you selected. They are independent
-   (an English question can get a Tamil answer; a Tamil question a Tamil answer). If translation is unavailable the answer stays English, is labelled English,
-   and a visible banner says so.
-2. **Local first** - the knowledge base must have evidence that is about the right crop **and** the right topic (a tomato *irrigation* passage does not answer a tomato *soil* question).
-3. **Online research** - otherwise it searches, opens only sources it may read (public, robots.txt-respecting, trusted by their **final** site, not just the link they came from), and extracts the relevant passages.
-4. **Answer** - written from those passages and checked: every sentence needs a real citation, supporting text, matching numbers and no unsupported overclaims; unsupported sentences are removed.
-   Sources are labelled *official guidance / research paper / general article* and *local / live web*; differing values between sources are shown.
-5. **Listen** - the answer is spoken in the language it is written in: local voice (Tamil: `facebook/mms-tts-tam`) -> your browser's voice -> a clear message.
-6. Evidence found online is saved in `research_store/` as **pending review** and never becomes permanent knowledge without a human decision.
+- Selected language → `localStorage.sawvialLanguage`
+- Chat history → `localStorage.sawvialChats` (array of conversations)
+- Currently open chat → `localStorage.sawvialActiveChat`
 
-## Honest limits
+## How to run
 
-* Search is key-less scholarly search (OpenAlex, Crossref): good for papers and open-access documents, **not a general web search** - extension pages
-  (e.g. TNAU, Vikaspedia) are found only when a paper links to them. Web pages not in English are skipped.
-* Grounding is a lexical check: it catches fabricated sources, invented numbers and overclaims; it cannot prove that a paraphrase is scientifically right.
-* The shipped LoRA adapter was trained before the dataset clean-up.
-* Voice input uses the browser's online speech recogniser (Chrome / Edge). Romanised text ("thakkali mann") is treated as English.
-* The model download, GPU speed, Tamil translation/voice quality and live online search have **not been verified by me** (no GPU/internet where this was built) - please try them and tell me what you see.
+Open `index.html` in any browser, or serve the folder with any static
+server (`python3 -m http.server`). A server is recommended — the
+microphone permission and Google Fonts behave better over `http://`
+than over `file://`.
 
-## Problems
+## Interface language
 
-| you see | do |
-|---|---|
-| `No usable GPU: ... CPU-only build` | run the 3rd line of the snippet again (it reinstalls CUDA PyTorch), then start again |
-| `Base model ... not in the local cache` / `Translation model ... not in the local cache` | run the `tools\download_models.py` line |
-| banner "answer could not be translated" | `curl http://localhost:8000/api/health` -> read `translator_error` |
-| answer says the online search could not be completed | no internet/blocked; the reason is in the message |
-| page looks old after an update | stop the server (Ctrl+C), start it again, press Ctrl+F5 |
+Picking a language does not just change the answers — the entire
+interface changes with it. Every visible string lives in `js/i18n.js`
+as `{ en, hi, bn, ta, te, kn, mr }`.
 
-Maintenance (add a PDF, review and publish collected research, tests, evaluation, retraining): see [docs/MAINTENANCE.md](docs/MAINTENANCE.md).
+- In HTML, mark an element with `data-i18n="key"` (or `data-i18n-html`,
+  `data-i18n-ph` for placeholders, `data-i18n-aria` for labels).
+  `applyI18n()` runs on every page load and fills them in.
+- In JS, call `t("key")` for anything rendered dynamically.
+- `<html lang>` is set to the chosen code, so browser hyphenation and
+  screen readers follow along.
+- On `language.html` the page re-renders live as you tap each card, so a
+  farmer can see their own script before committing.
+
+To add a string: add the key to `I18N` with all seven values, then
+reference it. To add a language: add its code to every entry, to
+`languages` in `js/script.js`, and to `SPEECH_LOCALE` in `js/chat.js`.
+
+## What's real and what's simulated
+
+- **Speech-to-text** — `startListening()` in `js/chat.js` uses the browser's
+  Web Speech API (`webkitSpeechRecognition`) when available, with the locale
+  set from the chosen language. If the browser has no speech API, or
+  recognition errors out, it falls back to inserting a demo question so the
+  flow can still be shown. Swap that fallback for your own STT endpoint.
+- **Text-to-speech** — the "Listen" button under each answer uses
+  `speechSynthesis` with the matching Indian locale. Real, not simulated.
+  Replace with your own TTS audio if you want better voices.
+- **Answers** — `respond()` in `js/chat.js` picks from the static
+  `demoAnswers` object in `js/script.js` using keyword matching
+  (`TOPIC_HINTS`). This is the one place to change: call your backend,
+  await the reply, and pass the text into the same `typeOut()` renderer.
+- **Photography** — the landing page hotlinks Unsplash images. Download
+  them into `assets/images/` and switch the `src` attributes if you need
+  the site to work offline.
+
+Everything else — layout, history, persistence, language selection,
+keyboard handling, responsive behaviour, accessibility — is real.
+
+## Deploying
+
+This is a static site — no build command needed.
+
+- **Render**: New Static Site → connect the repo → Build Command: empty
+  → Publish Directory: `.`
+- **Any other static host** (Netlify, GitHub Pages, Vercel): same idea —
+  point it at the repo root, no build step.

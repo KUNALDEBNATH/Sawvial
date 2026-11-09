@@ -31,6 +31,10 @@ MAX_CHUNK_CHARS = 200
 
 _MODEL_LOCK = threading.Lock()
 _MODELS: dict = {}
+# Cap how many TTS models stay resident at once. There are 7 supported languages; keeping all of
+# them loaded on an 8 GB GPU is unnecessary VRAM pressure alongside the LLM, so we keep a small
+# LRU window instead and evict the rest.
+_MAX_CACHED_MODELS = 2
 
 
 class SpeechUnavailable(RuntimeError):
@@ -55,8 +59,9 @@ def available_languages() -> list:
 
 
 def _load_model(language: str):
-    cached = _MODELS.get(language)
+    cached = _MODELS.pop(language, None)       # pop+reinsert to mark as most-recently-used
     if cached is not None:
+        _MODELS[language] = cached
         return cached
     import torch
     from transformers import AutoTokenizer, VitsModel
@@ -69,6 +74,12 @@ def _load_model(language: str):
         raise SpeechUnavailable(
             f"Local speech model {model_id} is not downloaded. Run: python tools/download_models.py "
             f"--speech (or set SAWVIAL_OFFLINE=0 to allow download on first use).") from exc
+    while len(_MODELS) >= _MAX_CACHED_MODELS:
+        evicted_lang, (evicted_model, _, evicted_device) = next(iter(_MODELS.items()))
+        del _MODELS[evicted_lang]
+        del evicted_model
+        if evicted_device == "cuda":
+            torch.cuda.empty_cache()
     _MODELS[language] = (model, tokenizer, device)
     return _MODELS[language]
 

@@ -1,0 +1,28 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local environment variables
+.env
+.env.*
+!.env.example
+
+# SAWVIAL generated / local artifacts
+index.prev/
+index.building/
+eval_results/
+research_store/downloads/
+research_store/reports/
+node_modules/
+
+index/lexical_matrix.npz
+index/lexical_vectorizer.joblib

@@ -114,6 +114,94 @@
     });
   }
 
+  /* Minimal, dependency-free Markdown -> safe HTML renderer for model answers.
+     Everything that isn't recognised markup is escaped with escapeHtml() first, so the LLM's
+     text is always treated as plain data, never as HTML to execute - no innerHTML of raw model
+     output anywhere, and no new library/CDN dependency is introduced.
+     Supports: #/##/### headings, paragraphs, bold (**x**), inline code (`x`), fenced code blocks
+     (```), bullet lists (-/*), numbered lists (1.), and [text](url) links (http/https only). */
+  function renderInlineMarkdown(s) {
+    let out = escapeHtml(s);
+    out = out.replace(/`([^`]+)`/g, "<code>$1</code>");
+    out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    // [text](url) - escapeHtml already ran, so quotes/angle-brackets in url/text are already
+    // entity-escaped; only allow http(s) links, never javascript:/data:/etc.
+    out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    return out;
+  }
+
+  function renderMarkdown(text) {
+    const lines = String(text || "").replace(/\r\n/g, "\n").split("\n");
+    const blocks = [];
+    let para = [];
+    let list = null; // {type: 'ul'|'ol', items: []}
+    let code = null; // {lines: []}
+
+    function flushPara() {
+      if (para.length) {
+        blocks.push("<p>" + renderInlineMarkdown(para.join(" ")) + "</p>");
+        para = [];
+      }
+    }
+    function flushList() {
+      if (list) {
+        const tag = list.type;
+        blocks.push("<" + tag + ">" + list.items.map(function (i) { return "<li>" + renderInlineMarkdown(i) + "</li>"; }).join("") + "</" + tag + ">");
+        list = null;
+      }
+    }
+
+    lines.forEach(function (raw) {
+      const line = raw;
+      if (code) {
+        if (/^\s*```\s*$/.test(line)) {
+          blocks.push("<pre><code>" + escapeHtml(code.lines.join("\n")) + "</code></pre>");
+          code = null;
+        } else {
+          code.lines.push(line);
+        }
+        return;
+      }
+      if (/^\s*```/.test(line)) {
+        flushPara(); flushList();
+        code = { lines: [] };
+        return;
+      }
+      const heading = line.match(/^(#{1,6})\s+(.*)$/);
+      if (heading) {
+        flushPara(); flushList();
+        const level = heading[1].length;
+        blocks.push("<h" + level + ">" + renderInlineMarkdown(heading[2]) + "</h" + level + ">");
+        return;
+      }
+      const bullet = line.match(/^\s*[-*]\s+(.*)$/);
+      if (bullet) {
+        flushPara();
+        if (!list || list.type !== "ul") { flushList(); list = { type: "ul", items: [] }; }
+        list.items.push(bullet[1]);
+        return;
+      }
+      const numbered = line.match(/^\s*\d+[.)]\s+(.*)$/);
+      if (numbered) {
+        flushPara();
+        if (!list || list.type !== "ol") { flushList(); list = { type: "ol", items: [] }; }
+        list.items.push(numbered[1]);
+        return;
+      }
+      if (!line.trim()) {
+        flushPara(); flushList();
+        return;
+      }
+      para.push(line.trim());
+    });
+    if (code) {
+      // Unterminated fence (truncated/streaming text) - still render what we have, safely escaped.
+      blocks.push("<pre><code>" + escapeHtml(code.lines.join("\n")) + "</code></pre>");
+    }
+    flushPara(); flushList();
+    return blocks.join("");
+  }
+
   function toast(text) {
     el.toast.textContent = text;
     el.toast.classList.add("show");
@@ -361,7 +449,7 @@
       '<div class="body">' +
       '<div class="meta">SAWVIAL <span class="tag">' + meta.icon + " " + label + "</span></div>" +
       bannerHtml(m.notes) +
-      '<div class="text"' + (m.lang ? ' lang="' + escapeHtml(m.lang) + '"' : "") + ">" + escapeHtml(m.text) + "</div>" +
+      '<div class="text"' + (m.lang ? ' lang="' + escapeHtml(m.lang) + '"' : "") + ">" + renderMarkdown(m.text) + "</div>" +
       notesHtml(m.notes) + differencesHtml(m.differences) +
       sourcesHtml(m.sources) +
       '<div class="actions">' +
@@ -523,14 +611,22 @@
   }
 
   function typeOut(node, text, done) {
+    // While animating, show plain text via textContent (never innerHTML of the raw, not-yet-fully
+    // -seen model output) - safe by construction, no markup rendered yet. Once typing finishes (or
+    // is stopped early), the accumulated text is rendered through renderMarkdown(), which escapes
+    // everything that isn't recognised Markdown before turning it into HTML, so headings/bold/
+    // lists/links/code render correctly without ever trusting raw LLM text as HTML.
     const words = text.split(" ");
     let i = 0;
     node.innerHTML = '<span class="caret"></span>';
+    function finish(finalText) {
+      node.innerHTML = renderMarkdown(finalText);
+      done(finalText);
+    }
     function stop() {
       clearInterval(timer);
       activeTypewriterStop = null;
-      node.textContent = words.slice(0, i).join(" ");
-      done(node.textContent);
+      finish(words.slice(0, i).join(" "));
     }
     activeTypewriterStop = stop;
     const timer = setInterval(function () {
@@ -543,8 +639,7 @@
       if (i >= words.length) {
         clearInterval(timer);
         activeTypewriterStop = null;
-        node.textContent = text;
-        done(text);
+        finish(text);
       }
     }, 45);
   }

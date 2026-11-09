@@ -135,10 +135,11 @@ def load_llm(args):
 
 @torch.no_grad()
 def answer(tok, model, question, passages, max_new_tokens, history=None,
-           cancel_event: threading.Event | None = None, do_sample: bool = False):
+           cancel_event: threading.Event | None = None, do_sample: bool = False,
+           feedback: str | None = None):
     msgs = [{"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": make_user_prompt(
-                format_context(passages), question, history=history)}]
+                format_context(passages), question, history=history, feedback=feedback)}]
     ids = tok(tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True),
               add_special_tokens=False, return_tensors="pt").to(model.device)
     if cancel_event is not None and cancel_event.is_set():
@@ -154,9 +155,23 @@ def answer(tok, model, question, passages, max_new_tokens, history=None,
 
         stopping_criteria = StoppingCriteriaList([CancelOnEvent()])
     gen_kw = dict(do_sample=True, temperature=0.35, top_p=0.9) if do_sample else dict(do_sample=False)
-    out = model.generate(**ids, max_new_tokens=max_new_tokens, repetition_penalty=1.0,
-                         pad_token_id=tok.pad_token_id or tok.eos_token_id,
-                         stopping_criteria=stopping_criteria, **gen_kw)
+    try:
+        out = model.generate(**ids, max_new_tokens=max_new_tokens, repetition_penalty=1.0,
+                             pad_token_id=tok.pad_token_id or tok.eos_token_id,
+                             stopping_criteria=stopping_criteria, **gen_kw)
+    except torch.cuda.OutOfMemoryError:
+        # Free whatever we can and retry once with a smaller generation budget rather than
+        # crashing the whole request; a second failure is allowed to propagate.
+        log.warning("CUDA out of memory during generation (max_new_tokens=%d); retrying with a smaller budget",
+                   max_new_tokens)
+        torch.cuda.empty_cache()
+        retry_tokens = max(32, max_new_tokens // 2)
+        try:
+            out = model.generate(**ids, max_new_tokens=retry_tokens, repetition_penalty=1.0,
+                                 pad_token_id=tok.pad_token_id or tok.eos_token_id,
+                                 stopping_criteria=stopping_criteria, **gen_kw)
+        finally:
+            torch.cuda.empty_cache()
     return tok.decode(out[0][ids["input_ids"].shape[1]:], skip_special_tokens=True).strip()
 
 

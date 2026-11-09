@@ -80,14 +80,36 @@ class TFIDFEmbedder:
 class SentenceTransformerEmbedder:
     def __init__(self, model_name: str):
         from sentence_transformers import SentenceTransformer
+        from sawvial.device import pick_device
         self.model_name = model_name
-        self._model = SentenceTransformer(model_name)
+        # Reuse the project-wide device decision (sawvial.device.pick_device) instead of letting
+        # sentence-transformers decide on its own, so embeddings follow SAWVIAL_DEVICE like every
+        # other model in the project and never silently fall back to CPU when a GPU is present.
+        try:
+            dev_info = pick_device()
+            device = dev_info["device"]
+        except Exception:
+            device = None   # pick_device raises if a GPU is required but missing; let ST pick CPU
+        self._model = SentenceTransformer(model_name, device=device)
+        self._batch_size = 32
 
     def encode(self, texts: List[str], **kwargs) -> np.ndarray:
-        return self._model.encode(
-            texts, batch_size=32, show_progress_bar=len(texts) > 50,
-            normalize_embeddings=True, convert_to_numpy=True,
-        ).astype(np.float32)
+        try:
+            return self._model.encode(
+                texts, batch_size=self._batch_size, show_progress_bar=len(texts) > 50,
+                normalize_embeddings=True, convert_to_numpy=True,
+            ).astype(np.float32)
+        except Exception as exc:
+            import torch
+            if isinstance(exc, torch.cuda.OutOfMemoryError) and self._batch_size > 1:
+                # 8 GB cards can OOM on a large batch of long passages; halve the batch and retry
+                # rather than failing the whole embedding/index build.
+                log.warning("CUDA out of memory while embedding (batch_size=%d); retrying with a smaller batch",
+                           self._batch_size)
+                torch.cuda.empty_cache()
+                self._batch_size = max(1, self._batch_size // 2)
+                return self.encode(texts, **kwargs)
+            raise
 
     @property
     def dimension(self) -> int:

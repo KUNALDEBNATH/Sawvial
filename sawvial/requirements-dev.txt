@@ -1,0 +1,4 @@
+# Tests:  pip install -r requirements-dev.txt   then   python -m pytest tests -q
+-r requirements.txt
+pytest>=8
+httpx>=0.27

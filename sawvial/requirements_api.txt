@@ -1,0 +1,2 @@
+# Kept so old instructions keep working. Use requirements.txt / requirements-llm.txt.
+-r requirements-llm.txt

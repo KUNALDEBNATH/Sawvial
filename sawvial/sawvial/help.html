@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title data-i18n="help.title">How to use SAWVIAL</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="css/landing.css" />
+</head>
+<body class="lp">
+
+<header class="lp-nav solid" id="lp-nav">
+  <div class="lp-nav-inner">
+    <a href="index.html" class="lp-brand">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M12 21.5C12 21.5 4.5 16.6 4.5 10.3C4.5 5.9 7.9 2.5 12 2.5C16.1 2.5 19.5 5.9 19.5 10.3C19.5 16.6 12 21.5 12 21.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+        <path d="M12 17.5V7.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+      SAWVIAL
+    </a>
+    <button class="lp-nav-toggle" id="lp-nav-toggle" aria-expanded="false" data-i18n-aria="nav.menu" aria-label="Open menu">☰</button>
+    <nav class="lp-nav-links" id="lp-nav-links" aria-label="Main navigation">
+      <a href="index.html" data-i18n="nav.home">Home</a>
+      <a href="language.html?redirect=help.html" data-i18n="nav.language">Language</a>
+      <a href="ask.html" class="lp-nav-cta" data-i18n="nav.ask">Ask SAWVIAL</a>
+    </nav>
+  </div>
+</header>
+
+<main class="lp-page">
+  <div class="wrap">
+    <div class="lp-page-head">
+      <span class="lp-kicker" data-i18n="nav.help">Help</span>
+      <h1 data-i18n="help.title">How to use SAWVIAL</h1>
+      <p data-i18n="help.sub">Four steps, about thirty seconds.</p>
+    </div>
+
+    <div class="lp-howto">
+      <div class="lp-howto-card">
+        <span class="lp-step-num">01</span>
+        <div>
+          <h3 data-i18n="how.s1t">Choose your language</h3>
+          <p data-i18n="help.s1d">Pick the language you are most comfortable speaking.</p>
+        </div>
+      </div>
+      <div class="lp-howto-card">
+        <span class="lp-step-num">02</span>
+        <div>
+          <h3 data-i18n="help.s2t">Speak or type your question</h3>
+          <p data-i18n="help.s2d">Tap the microphone and talk the way you would to a person.</p>
+        </div>
+      </div>
+      <div class="lp-howto-card">
+        <span class="lp-step-num">03</span>
+        <div>
+          <h3 data-i18n="help.s3t">Read the answer below your question</h3>
+          <p data-i18n="help.s3d">The reply appears directly under what you asked.</p>
+        </div>
+      </div>
+      <div class="lp-howto-card">
+        <span class="lp-step-num">04</span>
+        <div>
+          <h3 data-i18n="help.s4t">Listen, copy or come back later</h3>
+          <p data-i18n="help.s4d">Tap Listen to have the answer read aloud.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="lp-faq">
+      <details>
+        <summary data-i18n="help.q1">What can I ask about?</summary>
+        <p data-i18n="help.a1">Crops, soil, water, pests and general farm practice.</p>
+      </details>
+      <details>
+        <summary data-i18n="help.q2">Does it work without typing?</summary>
+        <p data-i18n="help.a2">Yes. The microphone is the main way in.</p>
+      </details>
+      <details>
+        <summary data-i18n="help.q3">Where are my questions stored?</summary>
+        <p data-i18n="help.a3">In your own browser on this device.</p>
+      </details>
+      <details>
+        <summary data-i18n="help.q4">Should I follow the advice exactly?</summary>
+        <p data-i18n="help.a4">Treat it as general, research-based guidance.</p>
+      </details>
+    </div>
+
+    <div class="lp-page-actions">
+      <a href="ask.html" class="lp-btn lp-btn-dark" data-i18n="nav.ask">Ask SAWVIAL</a>
+    </div>
+  </div>
+</main>
+
+<footer class="lp-footer">
+  <div class="wrap">
+    <div class="lp-footer-bottom" style="border:0;padding-top:0;">
+      <span data-i18n="footer.rights">© 2026 SAWVIAL</span>
+      <span><a href="index.html" data-i18n="nav.home">Home</a> · <a href="ask.html" data-i18n="nav.ask">Ask</a> · <a href="language.html?redirect=help.html" data-i18n="nav.language">Language</a></span>
+    </div>
+  </div>
+</footer>
+
+<script src="js/script.js"></script>
+<script src="js/i18n.js"></script>
+<script>
+  (function () {
+    var t = document.getElementById("lp-nav-toggle");
+    var l = document.getElementById("lp-nav-links");
+    t.addEventListener("click", function () {
+      var open = l.classList.toggle("open");
+      t.setAttribute("aria-expanded", open ? "true" : "false");
+    });
+  })();
+</script>
+</body>
+</html>

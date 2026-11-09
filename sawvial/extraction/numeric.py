@@ -88,14 +88,22 @@ def _to_float(s: str) -> float:
 
 
 def extract_structured_facts(text: str) -> List[StructuredFact]:
+    """Run the more specific patterns first (percent-effect, p-value, confidence interval) and mark
+    every span they match as consumed BEFORE the generic range/measurement patterns run, so e.g. the
+    "1.2-3.4" inside "95% CI: 1.2-3.4" is never also extracted a second time as a plain "range" fact,
+    and the "95" in "95% CI" is never also extracted a second time as a plain "measurement". Without
+    this ordering/consumption, p-values and confidence intervals produced overlapping, duplicated
+    numeric facts alongside the more generic ones."""
     facts: List[StructuredFact] = []
-    consumed_spans = []
+    consumed_spans: List[tuple] = []
 
     def overlaps(span):
         return any(a <= span[0] < b or a < span[1] <= b for a, b in consumed_spans)
 
     for m in _PERCENT_EFFECT_RE.finditer(text):
         span = m.span()
+        if overlaps(span):
+            continue
         consumed_spans.append(span)
         facts.append(StructuredFact(
             fact_type="effect",
@@ -106,18 +114,27 @@ def extract_structured_facts(text: str) -> List[StructuredFact]:
             unit="%",
         ))
 
-    for m in _PVALUE_RE.finditer(text):
-        facts.append(StructuredFact(fact_type="p_value", raw_text=m.group(0).strip(),
-                                     magnitude=_to_float(m.group("pval"))))
-
     for m in _CI_RE.finditer(text):
+        span = m.span()
+        if overlaps(span):
+            continue
+        consumed_spans.append(span)
         facts.append(StructuredFact(fact_type="confidence_interval", raw_text=m.group(0).strip(),
                                      low=_to_float(m.group("lo")), high=_to_float(m.group("hi"))))
+
+    for m in _PVALUE_RE.finditer(text):
+        span = m.span()
+        if overlaps(span):
+            continue
+        consumed_spans.append(span)
+        facts.append(StructuredFact(fact_type="p_value", raw_text=m.group(0).strip(),
+                                     magnitude=_to_float(m.group("pval"))))
 
     for m in _RANGE_RE.finditer(text):
         span = m.span()
         if overlaps(span):
             continue
+        consumed_spans.append(span)
         facts.append(StructuredFact(fact_type="range", raw_text=m.group(0).strip(),
                                      low=_to_float(m.group("lo")), high=_to_float(m.group("hi")),
                                      unit=(m.group("unit") or "").strip() or None))
@@ -126,6 +143,7 @@ def extract_structured_facts(text: str) -> List[StructuredFact]:
         span = m.span()
         if overlaps(span):
             continue
+        consumed_spans.append(span)
         facts.append(StructuredFact(fact_type="measurement", raw_text=m.group(0).strip(),
                                      magnitude=_to_float(m.group("value")), unit=m.group("unit")))
 

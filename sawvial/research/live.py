@@ -59,7 +59,7 @@ def live_research(question_en: str, top_k: int, store: Optional[ResearchStore] =
         if cancel_event is not None and cancel_event.is_set():
             break
         attempts += 1
-        o = workflow.ingest_url(c.target, store, pipe, hint=c)
+        o = workflow.ingest_url(c.target, store, pipe, hint=c, cancel_event=cancel_event)
         entry = {"url": o.get("final_url") or c.target, "title": o.get("title") or c.title, "status": o["status"],
                  "tier": o.get("tier"), "source_type": o.get("source_type"), "reason": o.get("reason")}
         report["documents"].append(entry)

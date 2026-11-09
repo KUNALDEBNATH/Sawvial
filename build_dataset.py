@@ -94,8 +94,20 @@ def cmd_validate(args):
             if line.strip():
                 docs.append(json.loads(line))
 
+    # Statuses a human reviewer (or the publish transaction acting on their decision) assigned are
+    # never produced by validate_knowledge_unit() itself (it only returns "validated", "needs_review",
+    # "evidence_only" or "rejected" - see sawvial/validation/validator.py). A unit already carrying
+    # "verified" (approved by a named reviewer via the online-research workflow and merged in by
+    # sawvial.dataset.writer.merge_into_dataset) or "pending_review"/"published" must keep that
+    # status: re-running automatic validation must never silently downgrade or re-grade a human
+    # decision back to an automatic one.
+    HUMAN_DECIDED_STATUSES = {"verified", "pending_review", "published"}
     validation_log = []
     for ku in units:
+        current = ku["quality"].get("validation_status")
+        if current in HUMAN_DECIDED_STATUSES or ku["quality"].get("published_as"):
+            validation_log.append({"id": ku["id"], "status": current, "reasons": ["preserved human review decision"]})
+            continue
         result = validate_knowledge_unit(ku, taxonomy, cfg_extraction)
         ku["quality"]["validation_status"] = result.status
         validation_log.append({"id": ku["id"], "status": result.status, "reasons": result.reasons})

@@ -1,0 +1,31 @@
+{
+  "generated_at": "2026-10-26T05:07:24.496858+00:00",
+  "qa_pairs_total": 6563,
+  "issue_counts": {
+    "question_not_specific": 4279,
+    "answer_truncated": 3979,
+    "answer_off_topic": 2232,
+    "answer_starts_mid_sentence": 1911,
+    "answer_is_reference_list": 609,
+    "answer_unusable_evidence": 253,
+    "answer_is_title_or_metadata": 4,
+    "answer_too_short": 3
+  },
+  "hard_failures_removed_by_fix": 2779,
+  "generic_questions_reused_with_different_answers": 358,
+  "qa_pairs_using_a_reused_generic_question": 5782,
+  "reused_question_note": "Not removed: SFT prompts include the retrieved context, so the same generic question with a different passage is not contradictory.",
+  "qa_pairs_usable_for_sft": 3102,
+  "units_by_status": {
+    "evidence_only": 5286,
+    "validated": 6432,
+    "needs_review": 4034,
+    "rejected": 12
+  },
+  "answerable_units": 5568,
+  "answerable_statuses": [
+    "validated",
+    "verified"
+  ],
+  "note": "QA answers are extractive templates (evidence text), not independently verified facts."
+}

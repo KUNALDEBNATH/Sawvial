@@ -164,7 +164,12 @@ def eval_api(args, cases, curated):
             rows.append({"case_id": c["case_id"], "type": c["type"], "error": str(exc)})
             continue
         g, srcs = res.get("grounding", {}), res.get("sources", [])
-        retrieved = [s["id"] for s in srcs]
+        # `sources` is grouped one entry per source DOCUMENT (api.sources_for merges every passage
+        # of a paper into one entry and exposes the individual passage ids under entry["ids"]).
+        # Using s["id"] alone would silently drop every non-first passage of a multi-passage
+        # document and under-count recall/mrr/ndcg against the per-passage `relevant_ids` gold
+        # labels, so flatten the real passage-id list instead.
+        retrieved = [pid for s in srcs for pid in (s.get("ids") or [s["id"]])]
         row = {"case_id": c["case_id"], "type": c["type"], "latency_ms": round(ms, 1), "warmup": i == 0,
                "grounded": bool(res.get("grounded")), "status": g.get("status"),
                "timings_ms": res.get("timings_ms", {}),
@@ -178,7 +183,11 @@ def eval_api(args, cases, curated):
         if c["type"] == "out_of_scope":
             row["correctly_refused"] = not res.get("grounded")
         if c["type"] == "multilingual":
-            row["answer_in_requested_language"] = res.get("answer_language") == c["language"]
+            # `answer_language` in the API response is just the requested language echoed back,
+            # so comparing against it is tautologically true. `text_language` is what the answer
+            # text actually ended up in (it falls back to English on a translation failure), so
+            # that is the field that reflects whether the response was genuinely translated.
+            row["answer_in_requested_language"] = res.get("text_language") == c["language"]
         rows.append(row)
     ok = [r for r in rows if "error" not in r]
     steady = [r["latency_ms"] for r in ok if not r["warmup"]]

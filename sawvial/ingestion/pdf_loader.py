@@ -53,7 +53,23 @@ class PageContent:
 
     @property
     def plain_text(self) -> str:
-        return "\n".join(b.text for b in self.blocks)
+        """All of this page's text, including table content.
+
+        Table rows are deliberately included: two documents that share the same narrative text but
+        contain different data tables are different documents, and must not hash identically (see
+        RawDocument.full_plain_text, used for document_hash()/document identity and deduplication).
+        Table cells never duplicate the paragraph text produced by structure.py - that module reads
+        page.blocks/page.tables directly and explicitly skips any block that falls inside a table's
+        bounding box, so this property is the only place table content and paragraph text are
+        combined into one flat string, and only for hashing/repeated-line-detection purposes.
+        """
+        parts = [b.text for b in self.blocks]
+        for table in self.tables:
+            for row in table.rows:
+                row_text = " | ".join(c.strip() for c in row if c and c.strip())
+                if row_text:
+                    parts.append(row_text)
+        return "\n".join(parts)
 
 
 MIN_CHARS_PER_PAGE = 100          # fewer extracted characters than this -> "low-text" page

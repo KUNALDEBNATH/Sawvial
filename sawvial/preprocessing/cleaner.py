@@ -85,6 +85,12 @@ def clean_page_text(text: str, repeated_lines: set) -> str:
         kept_lines.append(stripped)
 
     cleaned = "\n".join(kept_lines)
+    # The caller (structure.py) passes in one paragraph's worth of PDF lines joined by "\n" so
+    # that _dehyphenate() above can see the "-\n" it needs to rejoin a word split across a line
+    # wrap (e.g. "irriga-\ntion" -> "irrigation"). Any "\n" still left at this point is therefore
+    # an ordinary line wrap WITHIN that paragraph, not a paragraph or section break (those are
+    # handled by the caller, one clean_page_text() call per paragraph) - flatten it to a single
+    # space so the paragraph reads as normal flowing prose instead of literal embedded newlines.
+    cleaned = re.sub(r"\n+", " ", cleaned)
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
-    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     return cleaned.strip()

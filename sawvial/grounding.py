@@ -33,8 +33,20 @@ _REFUSAL = re.compile(
 
 # Overclaiming words: a sentence may only use them if the cited evidence uses them too
 # ("doubles", "always", "guaranteed", "miracle" ... are not supported just because the topic words match).
+#
+# NOTE: "best"/"worst" were REMOVED from this list (previously present). They are ordinary
+# comparative words in agronomy advice ("loamy soil is best for banana") -- not overclaiming
+# the way "guaranteed"/"miracle"/"eliminates"/"always"/"never" are -- and evidence routinely
+# expresses the same idea with a different superlative ("most preferred", "ideal", "ideally
+# suited"). Requiring the literal word "best" to appear in the evidence meant a model answer
+# that correctly paraphrased "most preferred" as "best" (a natural paraphrase of a direct
+# "what's best for X" question) had its ENTIRE sentence discarded by compose_supported_answer
+# -- including the genuinely supported loam/pH content -- leaving only whatever unrelated
+# sentence happened to avoid the word "best", which could be actively unhelpful (e.g. a
+# "not suitable" sentence with no positive guidance at all). Reproduced directly against
+# _supports(): identical sentence, "best" -> rejected, "suits ... well" -> accepted.
 _ABSOLUTE = re.compile(r"\b(doubl\w*|tripl\w*|halv\w*|eliminat\w*|guarante\w*|always|never|every\w*|all|completely|"
-                       r"entirely|only|miracle\w*|cure\w*|unlimited|best|worst|perfect\w*|no)\b", re.I)
+                       r"entirely|only|miracle\w*|cure\w*|unlimited|perfect\w*|no)\b", re.I)
 
 # fraction of a sentence's content terms that must occur in the cited text
 MIN_TERM_SUPPORT = 0.40

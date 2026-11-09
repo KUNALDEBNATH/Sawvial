@@ -14,8 +14,8 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional
 
-from sawvial.index.retriever import (CROP_SYNONYMS, _crop_pattern, detect_crops,
-                                     expand_query, query as retrieve)
+from sawvial.index.retriever import (CROP_SYNONYMS, _crop_pattern, _other_crops_near_mention,
+                                     detect_crops, expand_query, query as retrieve)
 
 QUERY_STOPWORDS = {
     "a", "an", "and", "are", "as", "at", "be", "been", "between", "by", "can", "could",
@@ -86,12 +86,33 @@ def clean_finding(finding: Optional[str]) -> Optional[str]:
 # Crop gating + a similarity score are not enough: a tomato passage about irrigation does not answer "which soil is
 # good for tomato". Each rule says: if the question asks about X, a passage only counts if it uses X-type vocabulary.
 # These rules describe what evidence must be ABOUT; they contain no answers and no crop-specific facts.
+_SOIL_UNAMBIGUOUS = re.compile(
+    r"\b(loam\w*|sand\w*|clay\w*|silt\w*|textur\w*|ph|drain\w*|organic (?:matter|carbon)|soil (?:type|reaction|structure|texture|depth)|"
+    r"alluvial|laterite|vertisol\w*|black soil|red soil|waterlog\w*|fertile|fertility)\b", re.I)
+_SOIL_AMBIGUOUS_TERM = re.compile(r"\b(?:saline|sodic|acid\w*|alkalin\w*)\b", re.I)
+_SOIL_WORD = re.compile(r"\bsoils?\b", re.I)
+
+
+def _soil_aspect_evidence(text: str) -> bool:
+    """"saline"/"sodic"/"acidic"/"alkaline" describe soil in "saline soil"/"sodic soils" - but just as
+    commonly describe WATER ("saline water", "alkaline water quality"), a different topic entirely. So
+    unlike the other, unambiguous soil vocabulary, those four only count as soil-suitability evidence
+    when the word "soil(s)" actually appears nearby (checked with a window, not a fixed word-count regex,
+    so it catches both orders: "saline soils" and "the soil ... was saline")."""
+    if _SOIL_UNAMBIGUOUS.search(text):
+        return True
+    for m in _SOIL_AMBIGUOUS_TERM.finditer(text):
+        window = text[max(0, m.start() - 40):m.end() + 40]
+        if _SOIL_WORD.search(window):
+            return True
+    return False
+
+
 ASPECT_RULES = [
     ("soil suitability",
      re.compile(r"\bsoils?\b.*\b(type|types|kind|kinds|texture|suitable|suitability|requirements?|good|best|ideal|ph|drainage|grow\w*)\b"
                 r"|\b(type|types|kind|kinds|texture|suitable|requirements?|good|best|ideal)\b.*\bsoils?\b", re.I),
-     re.compile(r"\b(loam\w*|sand\w*|clay\w*|silt\w*|textur\w*|ph|drain\w*|organic (?:matter|carbon)|soil (?:type|reaction|structure|texture|depth)|"
-                r"alluvial|laterite|vertisol\w*|black soil|red soil|saline|sodic|acid\w*|alkalin\w*|waterlog\w*|fertile|fertility)\b", re.I)),
+     _soil_aspect_evidence),
     ("water requirement",
      re.compile(r"\b(how much|requirements?|needs?|schedul\w*|when|interval|frequency|amount|quantity)\b.*\b(water|irrigat\w*)\b"
                 r"|\b(water|irrigat\w*)\b.*\b(requirements?|needs?|schedul\w*|interval|frequency|amount|quantity)\b", re.I),
@@ -107,8 +128,22 @@ def aspect_filter(question: str, passages: List[Dict[str, Any]]) -> tuple:
     matching vocabulary are kept (possibly none -> the caller treats local evidence as insufficient)."""
     for label, q_rule, ev_rule in ASPECT_RULES:
         if q_rule.search(question):
-            return [p for p in passages if ev_rule.search(p.get("text") or "")], label
+            matches = ev_rule.search if hasattr(ev_rule, "search") else ev_rule
+            return [p for p in passages if matches(p.get("text") or "")], label
     return passages, None
+
+
+_CITATION_YEAR = re.compile(r"\((?:19|20)\d{2}\)")
+
+
+def _looks_like_bibliography(text: str) -> bool:
+    """A reference list that leaked into a knowledge unit (e.g. the document's "references" section
+    not being recognised as such, so its last few citations got attributed to whatever heading came
+    before it) reads nothing like a finding - it's a run of "<n>. Author, Title. Journal V, pp (YEAR)."
+    entries. Three or more "(YEAR)" citation markers in one passage's evidence is a strong, cheap
+    signal of this (a real single-finding sentence essentially never cites three different years),
+    and such text must never be presented as if it were a scientific finding or answer."""
+    return len(_CITATION_YEAR.findall(text or "")) >= 3
 
 
 def retrieve_passages(bundle: Dict[str, Any], question: str, top_k: int,
@@ -128,6 +163,8 @@ def retrieve_passages(bundle: Dict[str, Any], question: str, top_k: int,
     passages: List[Dict[str, Any]] = []
     for r in hits:
         text = r["evidence"]
+        if _looks_like_bibliography(text):
+            continue                                 # a reference list, not a finding - never cite it as evidence
         ev_terms = {normalize_term(w) for w in re.findall(r"[a-z]{2,}", text.lower())}
         if query_terms and not query_terms & ev_terms:
             continue                                 # shares only the crop name, not the topic
@@ -137,8 +174,20 @@ def retrieve_passages(bundle: Dict[str, Any], question: str, top_k: int,
         context = {"crop": sorted(set(labels) & requested)} if crop_focused else r["context"]
         crop_labeled = bool(set(labels) & requested)
         crop_mentions = sum(len(_crop_pattern(CROP_SYNONYMS.get(c, [c])).findall(text)) for c in crops)
-        if crops and not (crop_labeled or crop_mentions >= 2):
-            continue         # a single passing mention is not crop-specific evidence
+        # context.crop (and therefore `crop_labeled`) comes from naive vocabulary matching with no
+        # primary-subject/passing-mention distinction, so it being true is NOT on its own evidence
+        # that this passage is specifically about the requested crop(s) - a passage can equally be
+        # "context-labeled" with a crop it only names once in a list of six. The real test (matching
+        # retriever.crop_mask's own invariant) is how many OTHER distinct crops co-occur with a
+        # requested crop IN THE SAME SENTENCE (not just anywhere in a possibly long, multi-sentence
+        # excerpt - see _other_crops_near_mention's docstring for why whole-passage scope is too
+        # coarse, especially for longer web-sourced excerpts): a sentence naming the requested
+        # crop(s) plus two-or-more other crops is a multi-crop list/comparison, not crop-specific
+        # evidence, regardless of crop_labeled or how many times the name appears elsewhere.
+        other_crops_mentioned = _other_crops_near_mention(text, requested) if requested else 0
+        is_crop_specific = (crop_labeled or crop_mentions >= 2) and other_crops_mentioned <= 1
+        if crops and not is_crop_specific:
+            continue         # a single passing mention, or a multi-crop list, is not crop-specific evidence
         src, prov = r["source"], r["provenance"]
         passages.append({
             "id": r["knowledge_unit_id"], "document_id": prov.get("document_id"),

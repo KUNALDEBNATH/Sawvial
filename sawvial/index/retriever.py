@@ -179,7 +179,10 @@ _ALL_CROP_PATTERNS = {c: _crop_pattern(forms) for c, forms in CROP_SYNONYMS.item
 
 
 def _crops_in_text(bundle: Dict[str, Any]) -> List[set]:
-    """Per index row: the set of known crops mentioned in the evidence text (cached)."""
+    """Per index row: the set of known crops mentioned anywhere in the evidence text (cached).
+    Kept for warm_up() / anything that wants "does this record mention crop X at all" without the
+    multi-crop specificity judgement - crop_mask() itself now uses the sentence-scoped check below
+    instead, since this whole-text version is too coarse for that purpose (see _other_crops_near_mention)."""
     if "_text_crops" not in bundle:
         rows = []
         for uid in bundle["ids"]:
@@ -187,6 +190,39 @@ def _crops_in_text(bundle: Dict[str, Any]) -> List[set]:
             rows.append({c for c, pat in _ALL_CROP_PATTERNS.items() if pat.search(text)})
         bundle["_text_crops"] = rows
     return bundle["_text_crops"]
+
+
+_SENT_SPLIT = re.compile(r"(?<=[.!?])\s+")
+
+
+def _other_crops_near_mention(text: str, requested) -> int:
+    """How many crops OUTSIDE `requested` co-occur, in the same sentence, with at least one of the
+    requested crop(s)' mentions.
+
+    Checking the whole evidence text (as crop_mask() originally did) means a long, multi-sentence
+    excerpt that mentions a requested crop once in one sentence and two unrelated crops in a
+    completely different sentence elsewhere gets penalised as if it were a six-crop list - that's
+    too coarse, especially for longer excerpts (common in freshly-ingested web/online research text,
+    which tends to carry more surrounding context per passage than the tighter curated-dataset
+    excerpts this check was first written against). The real question "is the record a multi-crop
+    list/comparison rather than being specifically about the requested crop(s)" is best answered at
+    the sentence a mention actually occurs in. Returns the SMALLEST other-crop count across every
+    sentence that mentions at least one requested crop, so one well-scoped sentence is enough to
+    qualify even if another sentence nearby is more general. `requested` may be a single crop name
+    (str) or a set of crop names (for a question naming more than one crop, e.g. a comparison).
+    """
+    requested = {requested} if isinstance(requested, str) else set(requested)
+    patterns = {c: (_ALL_CROP_PATTERNS.get(c) or _crop_pattern([c])) for c in requested}
+    best: Optional[int] = None
+    for sent in _SENT_SPLIT.split(text):
+        if not any(p.search(sent) for p in patterns.values()):
+            continue
+        others = sum(1 for c, p in _ALL_CROP_PATTERNS.items() if c not in requested and p.search(sent))
+        if best is None or others < best:
+            best = others
+    return best if best is not None else 0  # no sentence matched (e.g. a sentence-boundary quirk) -
+                                              # don't penalise for that; the caller already confirmed
+                                              # a requested crop appears somewhere in the text
 
 
 def ensure_index_bundle(index_dir: str | Path, dataset_dir: str | Path, load_dense_model: bool = True) -> Dict[str, Any]:
@@ -240,22 +276,29 @@ def warm_up(bundle: Dict[str, Any]) -> None:
 def crop_mask(bundle: Dict[str, Any], crop: str) -> np.ndarray:
     """Boolean mask over index rows: the record is genuinely about `crop`.
 
-    A record qualifies if `crop` is one of its context.crop labels, or if the evidence text
-    mentions the crop AND at most one other crop. A table/list that merely names the crop
-    among many others is NOT crop-specific evidence.
+    A record qualifies if it mentions the crop (in its context.crop labels or its evidence text)
+    AND at most one other crop. A table/list that merely names the crop among many others is NOT
+    crop-specific evidence.
+
+    IMPORTANT: context.crop is populated by sawvial.extraction.context_extractor purely from
+    vocabulary matches against the raw text - it has no notion of "primary subject" vs. "mentioned
+    in a list." Earlier this function treated `crop in labels` as an unconditional match (skipping
+    the other-crop check entirely), which meant a record whose context.crop happens to include the
+    crop - i.e. almost any record that mentions it at all - bypassed the very check this docstring
+    describes. That let e.g. a land-configuration passage listing "cotton, pearl millet, maize,
+    chillies, tomato etc." be served as if it were specifically about tomato. The other-crop check
+    now always applies, regardless of which signal (context label or text search) found the crop.
     """
     cache = bundle["_crop_masks"]
     if crop not in cache:
-        text_crops = _crops_in_text(bundle)
         pat = _ALL_CROP_PATTERNS.get(crop) or _crop_pattern([crop])
         mask = np.zeros(len(bundle["ids"]), dtype=bool)
         for pos, uid in enumerate(bundle["ids"]):
             ku = bundle["units_by_id"][uid]
             labels = {str(c).strip().lower() for c in ku.get("context", {}).get("crop", [])}
-            if crop in labels:
-                mask[pos] = True
-            elif pat.search(ku["knowledge"]["evidence"]):
-                mask[pos] = len(text_crops[pos] - {crop}) <= 1
+            evidence = ku["knowledge"]["evidence"]
+            if crop in labels or pat.search(evidence):
+                mask[pos] = _other_crops_near_mention(evidence, crop) <= 1
         cache[crop] = mask
     return cache[crop]
 

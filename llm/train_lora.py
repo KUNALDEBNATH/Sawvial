@@ -53,12 +53,17 @@ def main():
         sys.exit("No CUDA GPU detected. Training on CPU is impractical - use Google Colab/Kaggle "
                  "(free T4) or pass --force_cpu for a tiny smoke test.")
 
-    bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
-    dtype = torch.bfloat16 if bf16 else torch.float16
+    # --force_cpu must genuinely force CPU execution even when a GPU is present.
+    cuda_ok = torch.cuda.is_available() and not args.force_cpu
+    bf16 = cuda_ok and torch.cuda.is_bf16_supported()
+    dtype = torch.bfloat16 if bf16 else (torch.float16 if cuda_ok else torch.float32)
 
     tok = AutoTokenizer.from_pretrained(args.model)
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
+
+    if args.four_bit and not cuda_ok:
+        sys.exit("--4bit (QLoRA) needs a usable CUDA GPU; it cannot run with --force_cpu.")
 
     kwargs = {"torch_dtype": dtype}
     if args.four_bit:
@@ -72,7 +77,7 @@ def main():
     else:
         model.gradient_checkpointing_enable()
         model.enable_input_require_grads()
-        if torch.cuda.is_available():
+        if cuda_ok:                      # only move to the GPU when we are actually allowed to use it
             model.to("cuda")
     model.config.use_cache = False
 
@@ -90,10 +95,10 @@ def main():
         gradient_accumulation_steps=args.grad_accum, lr_scheduler_type="cosine",
         warmup_ratio=0.03, logging_steps=10, eval_strategy="steps", eval_steps=200,
         save_strategy="steps", save_steps=200, save_total_limit=2,
-        bf16=bf16, fp16=not bf16 and torch.cuda.is_available(),
+        bf16=bf16, fp16=cuda_ok and not bf16,
         group_by_length=False, report_to="none", remove_unused_columns=False,
         optim="paged_adamw_8bit" if args.four_bit else "adamw_torch",
-        use_cpu=args.force_cpu)
+        use_cpu=not cuda_ok)
     trainer = Trainer(model=model, args=targs, train_dataset=train, eval_dataset=val,
                       data_collator=DataCollatorForSeq2Seq(tok, padding=True, label_pad_token_id=-100))
     trainer.train()

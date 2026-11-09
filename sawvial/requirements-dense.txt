@@ -1,0 +1,6 @@
+# OPTIONAL: dense (semantic) retrieval -> hybrid with TF-IDF.  Build with: python build_dataset.py --skip-build --build-index --dense
+# Not needed for the default lexical index. Downloads a sentence-transformers model once.
+-r requirements.txt
+numpy<2
+faiss-cpu>=1.7.4
+sentence-transformers>=2.6.0
