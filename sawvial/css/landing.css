@@ -33,16 +33,16 @@ ul {
 }
 
 :root {
-  --ink: #101a12;
-  --ink-2: #2b3a2e;
-  --forest: #14301c;
-  --forest-2: #1e4427;
-  --leaf: #4c8c4a;
-  --leaf-soft: #7fb069;
-  --cream: #faf8f2;
-  --cream-2: #f1ede1;
-  --line: #e4ded0;
-  --sand: #c9a227;
+  --ink: #19271f;
+  --ink-2: #46564a;
+  --forest: #183a2c;
+  --forest-2: #28523d;
+  --leaf: #55764e;
+  --leaf-soft: #91a77a;
+  --cream: #f7f6f0;
+  --cream-2: #eceee5;
+  --line: #dfe4d9;
+  --sand: #b69a62;
 
   --font-sans: "Inter", "Segoe UI", "Noto Sans", "Noto Sans Devanagari",
     "Noto Sans Tamil", "Noto Sans Telugu", "Noto Sans Kannada",
@@ -408,6 +408,115 @@ body.lp {
   color: var(--ink-2);
   opacity: 0.8;
   font-size: 1.06rem;
+}
+
+/* ---------- Vegetable picker (home page) ---------- */
+.lp-crops-section {
+  padding: 88px 0 82px;
+  background: linear-gradient(180deg, #f1f4ed 0%, #f8f8f3 100%);
+  border-block: 1px solid #e4e9df;
+}
+
+.lp-crops-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 18px;
+}
+
+.lp-crop-card {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-end;
+  aspect-ratio: 1.16 / 1;
+  overflow: hidden;
+  padding: 18px;
+  border-radius: 20px;
+  color: #fff;
+  font-weight: 600;
+  background: #294334;
+  box-shadow: 0 8px 24px rgba(28, 48, 34, 0.12);
+  transition: transform 0.25s var(--ease), box-shadow 0.25s var(--ease);
+}
+
+.lp-crop-card::after {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  content: "";
+  background: linear-gradient(180deg, rgba(13, 26, 18, 0.02) 24%, rgba(13, 26, 18, 0.18) 56%, rgba(13, 26, 18, 0.78) 100%);
+  pointer-events: none;
+}
+
+.lp-crop-card:hover,
+.lp-crop-card:focus-visible {
+  transform: translateY(-4px);
+  box-shadow: 0 16px 32px rgba(28, 48, 34, 0.2);
+}
+
+.lp-crop-card:focus-visible {
+  outline: 3px solid var(--sand);
+  outline-offset: 3px;
+}
+
+.lp-crop-photo {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  transition: transform 0.6s var(--ease);
+}
+
+.lp-crop-card:hover .lp-crop-photo {
+  transform: scale(1.06);
+}
+
+.lp-crop-name {
+  position: relative;
+  z-index: 2;
+  font-size: 1.08rem;
+  line-height: 1.2;
+  color: #fff;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.3);
+}
+
+.lp-crop-card[data-crop="potato"] .lp-crop-photo,
+.lp-crop-card[data-crop="carrot"] .lp-crop-photo {
+  object-position: center 68%;
+}
+
+.lp-crop-card[data-crop="cucumber"] .lp-crop-photo {
+  object-position: center 72%;
+}
+
+.lp-crops-note {
+  margin-top: 28px;
+  color: var(--ink-2);
+  opacity: 0.85;
+  font-size: 0.95rem;
+}
+
+.lp-crops-note a {
+  color: var(--leaf);
+  font-weight: 600;
+}
+
+@media (max-width: 1100px) {
+  .lp-crops-grid { grid-template-columns: repeat(4, 1fr); }
+}
+@media (max-width: 860px) {
+  .lp-crops-grid { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 520px) {
+  .lp-crops-section { padding: 64px 0; }
+  .lp-crops-grid { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .lp-crop-card { border-radius: 16px; padding: 14px; }
+  .lp-crop-name { font-size: 0.98rem; }
 }
 
 /* ---------- Topic cards ---------- */

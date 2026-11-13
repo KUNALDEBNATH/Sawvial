@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="css/landing.css" />
+<link rel="stylesheet" href="css/landing.css?v=3" />
 </head>
 <body class="lp">
 
@@ -58,6 +58,60 @@
         <div class="lp-stat"><strong data-i18n="hero.stat2n">Voice</strong><span data-i18n="hero.stat2">No typing, no literacy barrier</span></div>
         <div class="lp-stat"><strong data-i18n="hero.stat3n">Free</strong><span data-i18n="hero.stat3">For every farmer, always</span></div>
       </div>
+    </div>
+  </section>
+
+  <!-- VEGETABLE PICKER -->
+  <section class="lp-section lp-crops-section" id="vegetables">
+    <div class="wrap">
+      <div class="lp-head reveal">
+        <span class="lp-kicker" data-i18n="crops.kicker">Grow something specific?</span>
+        <h2 data-i18n="crops.title">Pick your vegetable, get focused answers</h2>
+        <p data-i18n="crops.sub">Tap your crop and SAWVIAL will zero in on research just for it — faster, more specific answers than a general search.</p>
+      </div>
+      <div class="lp-crops-grid">
+        <a class="lp-crop-card reveal" data-crop="tomato" href="ask.html?crop=tomato">
+          <img class="lp-crop-photo" src="assets/images/crops/tomato.jpg?v=2" alt="" loading="lazy" decoding="async">
+          <span class="lp-crop-name" data-i18n="crop.tomato">Tomato</span>
+        </a>
+        <a class="lp-crop-card reveal" data-crop="potato" href="ask.html?crop=potato">
+          <img class="lp-crop-photo" src="assets/images/crops/potato.jpg?v=2" alt="" loading="lazy" decoding="async">
+          <span class="lp-crop-name" data-i18n="crop.potato">Potato</span>
+        </a>
+        <a class="lp-crop-card reveal" data-crop="brinjal" href="ask.html?crop=brinjal">
+          <img class="lp-crop-photo" src="assets/images/crops/brinjal.jpg" alt="" loading="lazy" decoding="async">
+          <span class="lp-crop-name" data-i18n="crop.brinjal">Brinjal</span>
+        </a>
+        <a class="lp-crop-card reveal" data-crop="chilli" href="ask.html?crop=chilli">
+          <img class="lp-crop-photo" src="assets/images/crops/chilli.jpg" alt="" loading="lazy" decoding="async">
+          <span class="lp-crop-name" data-i18n="crop.chilli">Chilli</span>
+        </a>
+        <a class="lp-crop-card reveal" data-crop="onion" href="ask.html?crop=onion">
+          <img class="lp-crop-photo" src="assets/images/crops/onion.jpg" alt="" loading="lazy" decoding="async">
+          <span class="lp-crop-name" data-i18n="crop.onion">Onion</span>
+        </a>
+        <a class="lp-crop-card reveal" data-crop="cabbage" href="ask.html?crop=cabbage">
+          <img class="lp-crop-photo" src="assets/images/crops/cabbage.jpg" alt="" loading="lazy" decoding="async">
+          <span class="lp-crop-name" data-i18n="crop.cabbage">Cabbage</span>
+        </a>
+        <a class="lp-crop-card reveal" data-crop="cauliflower" href="ask.html?crop=cauliflower">
+          <img class="lp-crop-photo" src="assets/images/crops/cauliflower.jpg" alt="" loading="lazy" decoding="async">
+          <span class="lp-crop-name" data-i18n="crop.cauliflower">Cauliflower</span>
+        </a>
+        <a class="lp-crop-card reveal" data-crop="okra" href="ask.html?crop=okra">
+          <img class="lp-crop-photo" src="assets/images/crops/okra.jpg" alt="" loading="lazy" decoding="async">
+          <span class="lp-crop-name" data-i18n="crop.okra">Okra</span>
+        </a>
+        <a class="lp-crop-card reveal" data-crop="cucumber" href="ask.html?crop=cucumber">
+          <img class="lp-crop-photo" src="assets/images/crops/cucumber.jpg" alt="" loading="lazy" decoding="async">
+          <span class="lp-crop-name" data-i18n="crop.cucumber">Cucumber</span>
+        </a>
+        <a class="lp-crop-card reveal" data-crop="carrot" href="ask.html?crop=carrot">
+          <img class="lp-crop-photo" src="assets/images/crops/carrot.jpg" alt="" loading="lazy" decoding="async">
+          <span class="lp-crop-name" data-i18n="crop.carrot">Carrot</span>
+        </a>
+      </div>
+      <p class="lp-crops-note" data-i18n="crops.note">Growing something else? <a href="ask.html">Ask about any crop</a> — SAWVIAL still covers soil, water and general farming questions.</p>
     </div>
   </section>
 
@@ -281,7 +335,7 @@
     </div>
     <div class="lp-footer-bottom">
       <span data-i18n="footer.rights">© 2026 SAWVIAL. All rights reserved.</span>
-      <span data-i18n="footer.photos">Photography: Unsplash</span>
+      <a href="photo-credits.html" data-i18n="footer.photos">Photography: Unsplash</a>
     </div>
   </div>
 </footer>
