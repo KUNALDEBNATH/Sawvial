@@ -105,6 +105,13 @@ body.chat {
   height: 26px;
 }
 
+.side-brand img {
+  width: 26px;
+  height: 26px;
+  object-fit: contain;
+  flex: none;
+}
+
 .icon-btn {
   width: 34px;
   height: 34px;
@@ -349,6 +356,53 @@ body.chat {
 .topbar .spacer {
   margin-left: auto;
 }
+
+/* ---- vegetable focus picker (topbar) ---- */
+.crop-picker {
+  --crop-a: #eef3e8;
+  --crop-b: #fdfcf8;
+  --crop-ink: var(--ink-2);
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: linear-gradient(135deg, var(--crop-a), var(--crop-b));
+  transition: box-shadow 0.2s var(--ease), transform 0.15s var(--ease);
+}
+.crop-picker:hover { box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08); }
+.crop-picker:focus-within { box-shadow: 0 0 0 3px rgba(76, 140, 74, 0.25); }
+.crop-picker-emoji { font-size: 1.05rem; line-height: 1; }
+.crop-picker select#crop-select {
+  appearance: none;
+  -webkit-appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--crop-ink);
+  font: inherit;
+  font-weight: 600;
+  font-size: 0.85rem;
+  padding: 0 18px 0 0;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none'%3E%3Cpath d='M6 9l6 6 6-6' stroke='%233b4a3d' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right center;
+  background-size: 14px;
+}
+.crop-picker select#crop-select:focus { outline: none; }
+/* one gradient per vegetable, set via data-crop on the wrapper */
+.crop-picker[data-crop="tomato"]      { --crop-a: #ffd9d2; --crop-b: #ffeee9; }
+.crop-picker[data-crop="potato"]      { --crop-a: #ead9bd; --crop-b: #f6eedd; }
+.crop-picker[data-crop="brinjal"]     { --crop-a: #e3d3f0; --crop-b: #f3eaf9; }
+.crop-picker[data-crop="chilli"]      { --crop-a: #ffd0cf; --crop-b: #ffe8e4; }
+.crop-picker[data-crop="onion"]       { --crop-a: #f3d9e6; --crop-b: #faeaf2; }
+.crop-picker[data-crop="cabbage"]     { --crop-a: #d6ecd0; --crop-b: #edf7ea; }
+.crop-picker[data-crop="cauliflower"] { --crop-a: #eef0dd; --crop-b: #f9faf0; }
+.crop-picker[data-crop="okra"]        { --crop-a: #d3ead0; --crop-b: #eaf6e7; }
+.crop-picker[data-crop="cucumber"]    { --crop-a: #cdeadb; --crop-b: #e9f8f0; }
+.crop-picker[data-crop="carrot"]      { --crop-a: #ffdfb3; --crop-b: #fff0da; }
 
 .lang-pill {
   display: inline-flex;
